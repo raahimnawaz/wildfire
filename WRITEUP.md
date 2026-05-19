@@ -109,18 +109,19 @@ anything. See `_tune_threshold()` in [`wildfire/train.py`](wildfire/train.py).
 
 | Model | Metric | Value | Baseline / paper |
 |---|---|---|---|
-| XGBoost ignition | ROC-AUC (2025 out-of-time) | 0.757 | n/a — operational ceiling ~0.85 with finer cells |
-| XGBoost ignition | Average Precision | 0.004 | matches base rate × ~3 |
+| XGBoost ignition (2 km, 5 years) | ROC-AUC (2025 out-of-time) | 0.782 | operational ceiling ~0.85 with 1 km cells |
+| XGBoost ignition (2 km, 5 years) | Average Precision | 0.006 | base rate ~0.0015, so model is 4× above chance |
+| XGBoost ignition (2 km, 5 years) | Precision at threshold 0.43 | 12.5% | deployable as a triage layer |
 | U-Net spread | ROC-AUC (NDWS test) | 0.903 | matches Huot et al. 2022 |
 | U-Net spread | AUC-PR | 0.295 | matches Huot et al. 2022 (~0.30) |
 
-The U-Net is at published-baseline quality. The XGBoost is respectable but
-not great — and the reason is structural, not algorithmic. At 4 km × 7-day
-cells with ~0.1% positive rate, even 2.4M training rows only contain
-~2,500 positive examples. Going to 2 km cells (4× more positives per fire)
-should push AUC into the 0.78-0.79 range; 1 km could push to 0.82+.
-Both are background tasks queued up — the 1 km path is mainly limited by
-GEE quota, not algorithm.
+The U-Net is at published-baseline quality. The XGBoost is now at **0.782**
+on the 2 km / 5-year dataset (11.5M rows, 23,531 positives in training) —
+the predicted +2-3 point lift from going from 4 km to 2 km. The
+precision-targeted threshold (0.43) hits **12.5% precision** which is
+realistic for a triage layer in operations. Going to 1 km would likely
+push AUC into the 0.82+ range and is queued as future work — mainly
+limited by GEE quota, not algorithm.
 
 ## What would push this further
 

@@ -6,7 +6,7 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
-| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.757** · AP 0.004 | 5 yrs train / 2025 holdout |
+| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.782** · AP 0.006 · 12.5% precision at threshold 0.43 | 5 yrs (2020-2024) train at 2 km / 2025 holdout |
 | **U-Net spread** | Per-pixel next-day fire mask | ROC-AUC **0.903** · AUC-PR **0.295** | Matches Huot et al. ICDM 2022 |
 
 ## What this is
