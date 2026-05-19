@@ -9,12 +9,12 @@ name: Daily wildfire dashboard
 on:
   schedule:
     - cron: "0 6 * * *"
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Data mode (synthetic | real)"
-        required: false
-        default: synthetic
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "wildfire/**"
+      - ".github/workflows/daily-dashboard.yml"
 
 permissions:
   contents: write       # needed to push to gh-pages
@@ -45,14 +45,13 @@ jobs:
           mkdir -p wildfire_models
           python -m wildfire.train --synthetic
 
-      - name: Run dashboard (synthetic)
-        if: ${{ github.event.inputs.mode != 'real' }}
+      - name: Build dashboard (synthetic demo mode)
         run: |
           mkdir -p wildfire_output
           python -c "
           from datetime import date
           from pathlib import Path
-          import json, numpy as np, pandas as pd
+          import json
           from wildfire.config import CFG
           from wildfire.synthetic_data import make_synthetic_dataset
           from wildfire.predict import score_dataframe
@@ -62,7 +61,6 @@ jobs:
           out = Path('wildfire_output') / today
           out.mkdir(parents=True, exist_ok=True)
 
-          # Generate a small synthetic snapshot
           df = make_synthetic_dataset(n_total=5000, seed=42)
           scored = score_dataframe(df)
           scored.to_parquet(out / f'ignition_{today}.parquet', index=False)
@@ -81,25 +79,12 @@ jobs:
           meta = json.loads(CFG.feature_meta_path().read_text())
           render_heatmap(scored, meta, today, summary, out / f'heatmap_{today}.html')
 
-          Path('site').mkdir(exist_ok=True)
           import shutil
+          Path('site').mkdir(exist_ok=True)
           shutil.copy(out / f'heatmap_{today}.html', 'site/index.html')
           shutil.copy(out / f'heatmap_{today}.html', f'site/heatmap_{today}.html')
           print(f'Built dashboard for {today}')
           "
-
-      - name: Run dashboard (real GEE)
-        if: ${{ github.event.inputs.mode == 'real' && secrets.GEE_SA_JSON != '' }}
-        env:
-          GEE_PROJECT: ${{ secrets.GEE_PROJECT }}
-        run: |
-          echo '${{ secrets.GEE_SA_JSON }}' > /tmp/gee-sa.json
-          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gee-sa.json
-          DATE=$(date -u +%Y-%m-%d)
-          python -m wildfire.dashboard --date $DATE --ignition-only
-          mkdir -p site
-          cp wildfire_output/$DATE/heatmap_$DATE.html site/index.html
-          cp wildfire_output/$DATE/heatmap_$DATE.html site/heatmap_$DATE.html
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3
