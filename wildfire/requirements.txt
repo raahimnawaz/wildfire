@@ -8,3 +8,7 @@ earthengine-api>=0.1.380
 torch>=2.1
 segmentation-models-pytorch>=0.5
 scipy>=1.11
+# Dashboard
+folium>=0.17
+# Dev / test
+pytest>=8.0
