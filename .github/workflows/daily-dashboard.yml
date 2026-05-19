@@ -1,0 +1,110 @@
+name: Daily wildfire dashboard
+
+# Refreshes the dashboard every day at 06:00 UTC and pushes the rendered
+# HTML to the gh-pages branch. CI doesn't have GEE auth, so this workflow
+# runs in *synthetic* mode by default — same code paths, regenerated UI.
+# To run with real GEE data, add a service-account JSON as the GEE_SA_JSON
+# secret and switch the dashboard command at the bottom.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Data mode (synthetic | real)"
+        required: false
+        default: synthetic
+
+permissions:
+  contents: write       # needed to push to gh-pages
+
+jobs:
+  build-dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r wildfire/requirements.txt
+          pip install folium
+
+      - name: Train a baseline model (synthetic)
+        run: |
+          mkdir -p wildfire_models
+          python -m wildfire.train --synthetic
+
+      - name: Run dashboard (synthetic)
+        if: ${{ github.event.inputs.mode != 'real' }}
+        run: |
+          mkdir -p wildfire_output
+          python -c "
+          from datetime import date
+          from pathlib import Path
+          import json, numpy as np, pandas as pd
+          from wildfire.config import CFG
+          from wildfire.synthetic_data import make_synthetic_dataset
+          from wildfire.predict import score_dataframe
+          from wildfire.heatmap import render as render_heatmap
+
+          today = date.today().isoformat()
+          out = Path('wildfire_output') / today
+          out.mkdir(parents=True, exist_ok=True)
+
+          # Generate a small synthetic snapshot
+          df = make_synthetic_dataset(n_total=5000, seed=42)
+          scored = score_dataframe(df)
+          scored.to_parquet(out / f'ignition_{today}.parquet', index=False)
+
+          summary = {
+              'target_date': today,
+              'n_cells_scored': int(len(scored)),
+              'n_high_risk_cells': int((scored['fire_alert'] == 1).sum()),
+              'max_ignition_probability': float(scored['fire_probability'].max()),
+              'mean_ignition_probability': float(scored['fire_probability'].mean()),
+              'spread_predictions': {},
+              'note': 'synthetic_demo_mode',
+          }
+          (out / f'summary_{today}.json').write_text(json.dumps(summary, indent=2))
+
+          meta = json.loads(CFG.feature_meta_path().read_text())
+          render_heatmap(scored, meta, today, summary, out / f'heatmap_{today}.html')
+
+          Path('site').mkdir(exist_ok=True)
+          import shutil
+          shutil.copy(out / f'heatmap_{today}.html', 'site/index.html')
+          shutil.copy(out / f'heatmap_{today}.html', f'site/heatmap_{today}.html')
+          print(f'Built dashboard for {today}')
+          "
+
+      - name: Run dashboard (real GEE)
+        if: ${{ github.event.inputs.mode == 'real' && secrets.GEE_SA_JSON != '' }}
+        env:
+          GEE_PROJECT: ${{ secrets.GEE_PROJECT }}
+        run: |
+          echo '${{ secrets.GEE_SA_JSON }}' > /tmp/gee-sa.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gee-sa.json
+          DATE=$(date -u +%Y-%m-%d)
+          python -m wildfire.dashboard --date $DATE --ignition-only
+          mkdir -p site
+          cp wildfire_output/$DATE/heatmap_$DATE.html site/index.html
+          cp wildfire_output/$DATE/heatmap_$DATE.html site/heatmap_$DATE.html
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          keep_files: true
+          commit_message: "ci: refresh dashboard"
