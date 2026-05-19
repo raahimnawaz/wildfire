@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Virtual environments
+# ─────────────────────────────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+.env/
+ENV/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets — never commit
+# ─────────────────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+credentials.json
+service-account.json
+kaggle.json
+.kaggle/
+.config/earthengine/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data — too large for git, easily reproducible from GEE / Kaggle
+# ─────────────────────────────────────────────────────────────────────────────
+wildfire_data/
+wildfire_output/
+*.parquet
+*.npy
+*.npz
+*.tfrecord
+*.tfrecord-*
+research_extracted.txt
+research_extracted.docx
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trained model artifacts — large, regenerable from training scripts
+# ─────────────────────────────────────────────────────────────────────────────
+wildfire_models/
+*.pt
+*.pth
+*.onnx
+*.h5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unrelated app in this directory — not part of the wildfire project
+# (a Streamlit/Flask stock-market predictor that happens to live here)
+# ─────────────────────────────────────────────────────────────────────────────
+quant_predictor.py
+server.py
+config.toml
+# root requirements.txt is for the unrelated stock app; wildfire uses wildfire/requirements.txt
+/requirements.txt
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Claude Code local config — not part of the project
+# ─────────────────────────────────────────────────────────────────────────────
+.claude/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE / OS
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Notebook / temp
+# ─────────────────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.log
+*.tmp
+demo*.parquet
+demo*.npz
+demo*.npy
