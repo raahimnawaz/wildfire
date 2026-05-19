@@ -26,7 +26,7 @@ Two complementary models that together cover the wildfire-prediction lifecycle:
 A combined dashboard CLI runs both models on any date and produces a
 satellite-style HUD heatmap plus structured outputs (parquet, GeoJSON, JSON).
 
-![Heatmap screenshot placeholder — open wildfire_output/<date>/heatmap_<date>.html in a browser](#)
+![West Coast wildfire risk dashboard — satellite-style HUD heatmap](docs/screenshots/heatmap.png)
 
 ## Data sources
 
@@ -121,10 +121,22 @@ Three non-obvious things that took real iteration to get right:
    persisted to model metadata, then read at inference time. See
    `_tune_threshold()` in [wildfire/train.py](wildfire/train.py).
 
+## Testing
+
+```powershell
+pip install -r wildfire/requirements.txt
+pytest tests/ -q
+```
+
+26 smoke tests covering cache hit/miss, feature math (wind speed, RH, VPD,
+calendar), imbalance handling, threshold tuning, and synthetic-data schema.
+All run CPU-only with no external dependencies (no GEE, no GPU).
+
 ## Verification & live runs
 
 A live, daily-refreshed dashboard is auto-deployed via GitHub Actions —
 see [.github/workflows/daily-dashboard.yml](.github/workflows/daily-dashboard.yml).
+A long-form engineering writeup is in [WRITEUP.md](WRITEUP.md).
 
 ## License
 
