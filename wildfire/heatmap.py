@@ -241,7 +241,8 @@ def _hud_shell(map_html: str, scored: pd.DataFrame, meta: dict,
 
     top10 = scored.sort_values("fire_probability", ascending=False).head(10)
     top_rows = "".join(
-        f"<tr><td>{r['longitude']:.3f}</td><td>{r['latitude']:.3f}</td>"
+        f"<tr class='clickable' data-lat='{r['latitude']:.4f}' data-lon='{r['longitude']:.4f}'>"
+        f"<td>{r['longitude']:.3f}</td><td>{r['latitude']:.3f}</td>"
         f"<td class='p' style='color:{_band(r['fire_probability'])}'>"
         f"{r['fire_probability']:.3f}</td>"
         f"<td>{r.get('temp_c', 0):.1f}</td>"
@@ -314,7 +315,11 @@ th {{ color: #6c7a89; text-align: left; padding: 6px 4px; border-bottom: 1px sol
       font-weight: 400; letter-spacing: 0.05em; text-transform: uppercase; }}
 td {{ padding: 5px 4px; border-bottom: 1px solid #131b25; color: #c8d3e0; }}
 td.p {{ font-weight: 500; }}
-tr:hover td {{ background: #0d141c; }}
+tr.clickable {{ cursor: pointer; transition: background 0.1s; }}
+tr.clickable:hover td {{ background: #1a2532; color: #00d4ff; }}
+tr.clickable:active td {{ background: #00d4ff22; }}
+.hint {{ font-family: 'DM Mono', monospace; font-size: 10px; color: #6c7a89;
+        margin-top: 6px; font-style: italic; }}
 .meta {{ font-family: 'DM Mono', monospace; font-size: 10px; color: #6c7a89;
          line-height: 1.7; margin-top: 18px; padding-top: 14px;
          border-top: 1px solid #1f2733; }}
@@ -370,7 +375,8 @@ tr:hover td {{ background: #0d141c; }}
     {hist_svg}
 
     <h2>Top 10 at-risk cells</h2>
-    <table>
+    <div class="hint">click any row to fly the map to that cell</div>
+    <table id="top10">
       <thead><tr><th>Lon</th><th>Lat</th><th>p</th><th>°C</th><th>m/s</th><th>KBDI</th></tr></thead>
       <tbody>{top_rows}</tbody>
     </table>
@@ -389,6 +395,24 @@ tr:hover td {{ background: #0d141c; }}
     </div>
   </div>
 </div>
+
+<script>
+// Bridge between HUD table rows and the Leaflet map inside the iframe.
+// Each row carries data-lat/data-lon. On click we postMessage to the iframe
+// which has a listener that flies the Leaflet map to those coordinates.
+document.addEventListener('DOMContentLoaded', () => {{
+  const iframe = document.querySelector('.map iframe');
+  document.querySelectorAll('#top10 tbody tr.clickable').forEach(row => {{
+    row.addEventListener('click', () => {{
+      const lat = parseFloat(row.dataset.lat);
+      const lon = parseFloat(row.dataset.lon);
+      if (!isNaN(lat) && !isNaN(lon) && iframe && iframe.contentWindow) {{
+        iframe.contentWindow.postMessage({{action: 'flyTo', lat, lon, zoom: 9}}, '*');
+      }}
+    }});
+  }});
+}});
+</script>
 </body></html>
 """
 
@@ -412,10 +436,50 @@ def render(scored: pd.DataFrame, meta: dict, target_date: str, summary: dict,
     print(f"[heatmap] wrote {out_html}  ({out_html.stat().st_size / 1024:.0f} KB)")
 
 
+_MAP_BRIDGE_JS = """
+<script>
+// Listen for messages from the parent HUD shell. The parent posts
+// {action: 'flyTo', lat, lon, zoom} when a Top-10 row is clicked.
+// We find the folium-generated Leaflet map by looking for the
+// `map_<hash>` global that folium creates.
+(function() {
+  function findMap() {
+    for (const key of Object.keys(window)) {
+      if (key.startsWith('map_') && window[key] && typeof window[key].flyTo === 'function') {
+        return window[key];
+      }
+    }
+    return null;
+  }
+  window.addEventListener('message', function(evt) {
+    const d = evt.data || {};
+    if (d.action !== 'flyTo') return;
+    const m = findMap();
+    if (!m) return;
+    try {
+      m.flyTo([d.lat, d.lon], d.zoom || 9, {duration: 1.4});
+      // pulse a temporary marker at the destination
+      const ring = L.circleMarker([d.lat, d.lon], {
+        radius: 24, color: '#00d4ff', weight: 2, fill: false, opacity: 0.9
+      }).addTo(m);
+      setTimeout(() => m.removeLayer(ring), 2200);
+    } catch (e) {}
+  });
+})();
+</script>
+"""
+
+
 def _to_iframe(map_html: str) -> str:
     """Inline the folium map via a sandboxed srcdoc iframe so its <head> and JS
-    don't collide with our HUD shell."""
+    don't collide with our HUD shell. Injects a postMessage listener so the
+    parent table rows can pan the map."""
     import html as _h
+    # Inject the bridge before </body> in the folium HTML
+    if "</body>" in map_html:
+        map_html = map_html.replace("</body>", _MAP_BRIDGE_JS + "</body>", 1)
+    else:
+        map_html = map_html + _MAP_BRIDGE_JS
     return (f'<iframe srcdoc="{_h.escape(map_html, quote=True)}" '
             f'style="border:0; width:100%; height:100%;" '
             f'sandbox="allow-scripts allow-same-origin allow-popups"></iframe>')
