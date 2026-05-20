@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Use the wildfire-specific requirements file (not the unrelated
+          # stock app's root one, which is gitignored anyway).
+          pip install -r wildfire/requirements.txt
+          # CPU-only torch keeps the runner light; smp drags torch in but the
+          # tests don't actually exercise the spread model.
+          pip install pytest
+
+      - name: Run pytest
+        run: pytest tests/ -q

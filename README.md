@@ -1,8 +1,15 @@
 # West Coast Wildfire Prediction
 
+[![tests](https://github.com/raahimnawaz/wildfire/actions/workflows/tests.yml/badge.svg)](https://github.com/raahimnawaz/wildfire/actions/workflows/tests.yml)
+[![daily-dashboard](https://github.com/raahimnawaz/wildfire/actions/workflows/daily-dashboard.yml/badge.svg)](https://github.com/raahimnawaz/wildfire/actions/workflows/daily-dashboard.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Live demo](https://img.shields.io/badge/%E2%96%B6_Open-Live_interactive_dashboard-00d4ff?style=for-the-badge&labelColor=050810)](https://raahimnawaz.github.io/wildfire/)
+
 An operational two-stage wildfire prediction pipeline for the US West Coast.
 Trained on **real** Google Earth Engine satellite data and the canonical
 **Next Day Wildfire Spread** benchmark from Google Research.
+
+> **▶ Click the screenshot below or the live-demo badge above to open the interactive dashboard** — pan, zoom, click cells for popups, click rows in the top-10 table to fly the map to that location.
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
@@ -26,7 +33,7 @@ Two complementary models that together cover the wildfire-prediction lifecycle:
 A combined dashboard CLI runs both models on any date and produces a
 satellite-style HUD heatmap plus structured outputs (parquet, GeoJSON, JSON).
 
-![West Coast wildfire risk dashboard — satellite-style HUD heatmap](docs/screenshots/heatmap.png)
+[![West Coast wildfire risk dashboard — satellite-style HUD heatmap](docs/screenshots/heatmap.png)](https://raahimnawaz.github.io/wildfire/)
 
 ## Data sources
 
