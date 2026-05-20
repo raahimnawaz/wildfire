@@ -1,10 +1,18 @@
 name: Daily wildfire dashboard
 
-# Refreshes the dashboard every day at 06:00 UTC and pushes the rendered
-# HTML to the gh-pages branch. CI doesn't have GEE auth, so this workflow
-# runs in *synthetic* mode by default — same code paths, regenerated UI.
-# To run with real GEE data, add a service-account JSON as the GEE_SA_JSON
-# secret and switch the dashboard command at the bottom.
+# Deploys the latest real-data dashboard to GitHub Pages.
+#
+# The repo ships a real Sept 15 2025 snapshot (heatmap_2025-09-15.html)
+# generated from the trained XGBoost model + cached 2 km GEE pulls.
+# This workflow copies that snapshot to a `site/` dir and publishes to
+# gh-pages. It runs nightly to keep the deployment fresh, and on push
+# whenever the snapshot or workflow changes.
+#
+# To upgrade to truly live data later: add a GEE service-account JSON as
+# the GEE_SA_JSON secret, and a `gh-pages-real` step that runs
+# `python -m wildfire.dashboard --date $(date -u +%Y-%m-%d)` before the
+# deploy step. The current setup is the simplest reproducible thing that
+# always shows real numbers without CI auth.
 
 on:
   schedule:
@@ -13,83 +21,38 @@ on:
   push:
     branches: [main]
     paths:
-      - "wildfire/**"
+      - "wildfire_output/2025-09-15/heatmap_2025-09-15.html"
       - ".github/workflows/daily-dashboard.yml"
 
 permissions:
-  contents: write       # needed to push to gh-pages
+  contents: write
 
 jobs:
-  build-dashboard:
+  deploy-dashboard:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
+      - name: Stage site/
         run: |
-          python -m pip install --upgrade pip
-          pip install -r wildfire/requirements.txt
-          pip install folium
-
-      - name: Train a baseline model (synthetic)
-        run: |
-          mkdir -p wildfire_models
-          python -m wildfire.train --synthetic
-
-      - name: Build dashboard (synthetic demo mode)
-        run: |
-          mkdir -p wildfire_output
-          python -c "
-          from datetime import date
-          from pathlib import Path
-          import json
-          from wildfire.config import CFG
-          from wildfire.synthetic_data import make_synthetic_dataset
-          from wildfire.predict import score_dataframe
-          from wildfire.heatmap import render as render_heatmap
-
-          today = date.today().isoformat()
-          out = Path('wildfire_output') / today
-          out.mkdir(parents=True, exist_ok=True)
-
-          df = make_synthetic_dataset(n_total=5000, seed=42)
-          scored = score_dataframe(df)
-          scored.to_parquet(out / f'ignition_{today}.parquet', index=False)
-
-          summary = {
-              'target_date': today,
-              'n_cells_scored': int(len(scored)),
-              'n_high_risk_cells': int((scored['fire_alert'] == 1).sum()),
-              'max_ignition_probability': float(scored['fire_probability'].max()),
-              'mean_ignition_probability': float(scored['fire_probability'].mean()),
-              'spread_predictions': {},
-              'note': 'synthetic_demo_mode',
-          }
-          (out / f'summary_{today}.json').write_text(json.dumps(summary, indent=2))
-
-          meta = json.loads(CFG.feature_meta_path().read_text())
-          render_heatmap(scored, meta, today, summary, out / f'heatmap_{today}.html')
-
-          import shutil
-          Path('site').mkdir(exist_ok=True)
-          shutil.copy(out / f'heatmap_{today}.html', 'site/index.html')
-          shutil.copy(out / f'heatmap_{today}.html', f'site/heatmap_{today}.html')
-          print(f'Built dashboard for {today}')
-          "
+          mkdir -p site
+          # The repo ships exactly one real dashboard snapshot — use it as
+          # both the index and the dated file.
+          SNAPSHOT="wildfire_output/2025-09-15/heatmap_2025-09-15.html"
+          cp "$SNAPSHOT" site/index.html
+          cp "$SNAPSHOT" site/heatmap_2025-09-15.html
+          cp "wildfire_output/2025-09-15/summary_2025-09-15.json" site/
+          # Light fingerprint for verification
+          ls -la site/
+          echo "Page size: $(wc -c < site/index.html) bytes"
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
-          keep_files: true
-          commit_message: "ci: refresh dashboard"
+          keep_files: false
+          commit_message: "ci: deploy real-data dashboard snapshot"

@@ -49,6 +49,17 @@ wildfire_output/
 research_extracted.txt
 research_extracted.docx
 
+# Allow-list: ship the latest real-data dashboard snapshot as a deployable artifact.
+# (GitHub Actions has no GEE creds, so the gh-pages live URL serves this fixed
+#  Sept 15 2025 snapshot instead of fake synthetic data.)
+!wildfire_output/
+wildfire_output/*
+!wildfire_output/2025-09-15/
+wildfire_output/2025-09-15/*
+!wildfire_output/2025-09-15/heatmap_2025-09-15.html
+!wildfire_output/2025-09-15/summary_2025-09-15.json
+!wildfire_output/2025-09-15/ignition_2025-09-15.parquet
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Trained model artifacts — large, regenerable from training scripts
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +68,13 @@ wildfire_models/
 *.pth
 *.onnx
 *.h5
+
+# Allow-list: ship the trained XGBoost ignition model so reviewers can run
+# predict.py / dashboard.py against real-world data without retraining.
+!wildfire_models/
+wildfire_models/*
+!wildfire_models/west_coast_wildfire_model.json
+!wildfire_models/feature_meta.json
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Unrelated app in this directory — not part of the wildfire project
