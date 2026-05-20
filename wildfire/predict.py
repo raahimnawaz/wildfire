@@ -59,7 +59,10 @@ def score_dataframe(df: pd.DataFrame, threshold: float | None = None) -> pd.Data
     X = derived[CFG.feature_columns].astype("float32").values
     proba = model.predict_proba(X)[:, 1]
 
-    out = df.copy()
+    # Return the DERIVED dataframe (raw cols + engineered cols) with
+    # predictions appended. Downstream consumers (heatmap, dashboard) read
+    # temp_c, wind_speed_ms, etc. — those only exist after derive_all.
+    out = derived.copy()
     out["fire_probability"] = proba
     out["fire_alert"]       = (proba >= threshold).astype(np.int8)
     return out
