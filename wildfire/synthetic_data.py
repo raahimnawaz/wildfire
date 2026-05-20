@@ -60,6 +60,12 @@ def _sample_class(n: int, fire: bool, rng: np.random.Generator) -> pd.DataFrame:
         {"year": years, "month": month, "day": day}
     )
 
+    # Apply a rough West Coast land mask so synthetic points don't end up
+    # in the Pacific Ocean. The mask is a piecewise-linear coastline
+    # approximation — accurate enough that the demo doesn't show fires
+    # offshore, cheap enough to compute inline.
+    lon_arr, lat_arr = _sample_land_points(n, rng)
+
     df = pd.DataFrame({
         "date":              dates,
         "temp_c":            temp_c,
@@ -73,11 +79,51 @@ def _sample_class(n: int, fire: bool, rng: np.random.Generator) -> pd.DataFrame:
         "elevation_m":       elevation,
         "slope_deg":         slope,
         "aspect_deg":        aspect,
-        "longitude":         rng.uniform(CFG.west_coast_bbox[0], CFG.west_coast_bbox[2], n),
-        "latitude":          rng.uniform(CFG.west_coast_bbox[1], CFG.west_coast_bbox[3], n),
+        "longitude":         lon_arr,
+        "latitude":          lat_arr,
         CFG.target_column:   np.int8(1 if fire else 0),
     })
     return df
+
+
+def _sample_land_points(n: int, rng: np.random.Generator):
+    """
+    Rejection-sample n (lon, lat) points inside a rough US West Coast
+    coastline polygon. Uses a piecewise-linear longitude-of-coast as a
+    function of latitude. Cheap and dependency-free (no shapely / geopandas).
+
+    West coast longitude (CA-OR-WA) varies roughly:
+       lat 32.5 (San Diego)    coast lon ≈ -117.2
+       lat 34.0 (LA)           coast lon ≈ -118.6
+       lat 36.6 (Monterey)     coast lon ≈ -122.0
+       lat 38.0 (Pt. Reyes)    coast lon ≈ -123.0
+       lat 40.4 (Cape Mendocino) coast lon ≈ -124.4
+       lat 43.4 (Coos Bay)     coast lon ≈ -124.2
+       lat 46.2 (Cape Disappointment) coast lon ≈ -124.1
+       lat 48.4 (Cape Flattery)  coast lon ≈ -124.7
+    """
+    coast_lat = np.array([32.5, 34.0, 36.6, 38.0, 40.4, 43.4, 46.2, 48.4, 49.0])
+    coast_lon = np.array([-117.2, -118.6, -122.0, -123.0, -124.4, -124.2, -124.1, -124.7, -124.7])
+
+    lons = np.empty(n, dtype=np.float64)
+    lats = np.empty(n, dtype=np.float64)
+    filled = 0
+    # Oversample factor — gives us enough rejections
+    while filled < n:
+        batch = max(n * 2, 1024)
+        candidate_lat = rng.uniform(CFG.west_coast_bbox[1], CFG.west_coast_bbox[3], batch)
+        candidate_lon = rng.uniform(CFG.west_coast_bbox[0], CFG.west_coast_bbox[2], batch)
+        # Coast longitude at each candidate latitude
+        coast_at = np.interp(candidate_lat, coast_lat, coast_lon)
+        # Land = east of the coastline (lon > coast longitude at that latitude)
+        on_land = candidate_lon > coast_at
+        good_lat = candidate_lat[on_land]
+        good_lon = candidate_lon[on_land]
+        take = min(len(good_lat), n - filled)
+        lats[filled:filled + take] = good_lat[:take]
+        lons[filled:filled + take] = good_lon[:take]
+        filled += take
+    return lons, lats
 
 
 def make_synthetic_dataset(

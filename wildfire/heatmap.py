@@ -89,8 +89,8 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
     HeatMap(
         heat_data,
         name="Ignition heat",
-        radius=14,
-        blur=18,
+        radius=10,           # tighter footprint reduces offshore bleed from coastal cells
+        blur=12,
         min_opacity=0.35,
         max_zoom=10,
         gradient={
