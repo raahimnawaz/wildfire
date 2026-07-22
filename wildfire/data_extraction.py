@@ -44,10 +44,36 @@ def _require_ee():
 
 
 def init_ee(project: Optional[str] = None) -> None:
-    """Initialize Earth Engine. Pass your GCP project id (or set GEE_PROJECT env var)."""
+    """
+    Initialize Earth Engine.
+
+    Auth resolution order:
+      1. GEE_SA_JSON env var holding a service-account key (JSON string or a
+         path to one) — the non-interactive path used by CI.
+      2. Cached interactive OAuth credentials from `earthengine authenticate`.
+    Pass your GCP project id or set the GEE_PROJECT env var.
+    """
     import os
     ee = _require_ee()
     project = project or os.environ.get("GEE_PROJECT")
+
+    sa_json = os.environ.get("GEE_SA_JSON")
+    if sa_json:
+        import json as _json
+        import tempfile
+        if os.path.exists(sa_json):
+            key_path = sa_json
+            email = _json.loads(open(sa_json).read()).get("client_email")
+        else:
+            tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+            tmp.write(sa_json)
+            tmp.close()
+            key_path = tmp.name
+            email = _json.loads(sa_json).get("client_email")
+        creds = ee.ServiceAccountCredentials(email, key_path)
+        ee.Initialize(creds, project=project)
+        return
+
     if project:
         ee.Initialize(project=project)
     else:

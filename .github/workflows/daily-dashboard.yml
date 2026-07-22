@@ -11,9 +11,11 @@ name: Daily wildfire dashboard
 # GEE credentials, so it redeploys real numbers rather than rendering
 # synthetic stand-ins.
 #
-# To upgrade to truly live daily data: add a GEE service-account JSON as the
-# GEE_SA_JSON secret and a step that runs
-# `python -m wildfire.dashboard --date $(date -u +%Y-%m-%d)` before deploy.
+# LIVE MODE: when a GEE_SA_JSON repo secret exists (a GCP service-account
+# key registered with Earth Engine), the workflow generates TODAY's dashboard
+# in-runner before staging — the staging step below always picks the newest
+# snapshot, so a fresh run wins and the committed snapshot is the automatic
+# fallback when the secret is absent or the GEE pull fails.
 
 on:
   schedule:
@@ -31,11 +33,29 @@ permissions:
 jobs:
   deploy-dashboard:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 45
+    env:
+      GEE_SA_JSON: ${{ secrets.GEE_SA_JSON }}
+      GEE_PROJECT: wildfire-claude
 
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+
+      - name: Set up Python (live mode)
+        if: env.GEE_SA_JSON != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate today's dashboard from live GEE data
+        if: env.GEE_SA_JSON != ''
+        continue-on-error: true  # GEE hiccup -> fall back to committed snapshot
+        run: |
+          # Minimal deps for the ignition path (torch/U-Net spread is skipped
+          # in CI via --ignition-only to keep the install light).
+          pip install --quiet earthengine-api xgboost pandas pyarrow folium numpy
+          python -m wildfire.dashboard --date "$(date -u +%Y-%m-%d)" --ignition-only
 
       - name: Stage site/
         run: |

@@ -153,10 +153,12 @@ dependencies (no GEE, no GPU).
 
 ## Verification & live runs
 
-The newest committed real-data dashboard snapshot is auto-published to
-GitHub Pages by GitHub Actions (redeployed nightly; the data itself
-refreshes when a new dashboard run is committed — CI holds no GEE
-credentials, so it never renders synthetic stand-in data). See
+The newest real-data dashboard snapshot is auto-published to GitHub Pages
+by GitHub Actions nightly. Without credentials, CI redeploys the newest
+committed snapshot (never synthetic stand-in data); adding a `GEE_SA_JSON`
+service-account secret flips the same workflow into live mode — it
+generates today's dashboard from a fresh GEE pull in-runner each night,
+with the committed snapshot as automatic fallback. See
 [.github/workflows/daily-dashboard.yml](.github/workflows/daily-dashboard.yml).
 A long-form engineering writeup is in [WRITEUP.md](WRITEUP.md).
 
