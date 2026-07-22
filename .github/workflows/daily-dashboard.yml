@@ -1,18 +1,19 @@
 name: Daily wildfire dashboard
 
-# Deploys the latest real-data dashboard to GitHub Pages.
+# Publishes the NEWEST committed real-data dashboard snapshot to GitHub Pages.
 #
-# The repo ships a real Sept 15 2025 snapshot (heatmap_2025-09-15.html)
-# generated from the trained XGBoost model + cached 2 km GEE pulls.
-# This workflow copies that snapshot to a `site/` dir and publishes to
-# gh-pages. It runs nightly to keep the deployment fresh, and on push
-# whenever the snapshot or workflow changes.
+# The repo ships real snapshots under wildfire_output/<date>/ (heatmap HTML +
+# summary JSON + scored parquet), generated locally from the trained models
+# and live 2 km GEE pulls. This workflow picks the latest date directory,
+# stages it as the site index, and deploys to gh-pages. It reruns nightly so
+# the deployment stays fresh, and on push whenever a snapshot or the workflow
+# changes. The DATA refreshes when a new snapshot is committed — CI holds no
+# GEE credentials, so it redeploys real numbers rather than rendering
+# synthetic stand-ins.
 #
-# To upgrade to truly live data later: add a GEE service-account JSON as
-# the GEE_SA_JSON secret, and a `gh-pages-real` step that runs
-# `python -m wildfire.dashboard --date $(date -u +%Y-%m-%d)` before the
-# deploy step. The current setup is the simplest reproducible thing that
-# always shows real numbers without CI auth.
+# To upgrade to truly live daily data: add a GEE service-account JSON as the
+# GEE_SA_JSON secret and a step that runs
+# `python -m wildfire.dashboard --date $(date -u +%Y-%m-%d)` before deploy.
 
 on:
   schedule:
@@ -21,7 +22,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "wildfire_output/2025-09-15/heatmap_2025-09-15.html"
+      - "wildfire_output/**"
       - ".github/workflows/daily-dashboard.yml"
 
 permissions:
@@ -39,12 +40,18 @@ jobs:
       - name: Stage site/
         run: |
           mkdir -p site
-          # The repo ships exactly one real dashboard snapshot — use it as
-          # both the index and the dated file.
-          SNAPSHOT="wildfire_output/2025-09-15/heatmap_2025-09-15.html"
-          cp "$SNAPSHOT" site/index.html
-          cp "$SNAPSHOT" site/heatmap_2025-09-15.html
-          cp "wildfire_output/2025-09-15/summary_2025-09-15.json" site/
+          # Newest committed snapshot: date-named dirs sort chronologically.
+          LATEST=$(find wildfire_output -mindepth 2 -maxdepth 2 -name 'heatmap_*.html' | sort | tail -n 1)
+          if [ -z "$LATEST" ]; then
+            echo "No committed dashboard snapshot found" >&2
+            exit 1
+          fi
+          SNAP_DIR=$(dirname "$LATEST")
+          DATE=$(basename "$SNAP_DIR")
+          echo "Deploying snapshot: $DATE"
+          cp "$SNAP_DIR/heatmap_$DATE.html" site/index.html
+          cp "$SNAP_DIR/heatmap_$DATE.html" "site/heatmap_$DATE.html"
+          [ -f "$SNAP_DIR/summary_$DATE.json" ] && cp "$SNAP_DIR/summary_$DATE.json" site/
           # Light fingerprint for verification
           ls -la site/
           echo "Page size: $(wc -c < site/index.html) bytes"
@@ -55,4 +62,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
           keep_files: false
-          commit_message: "ci: deploy real-data dashboard snapshot"
+          commit_message: "ci: deploy latest real-data dashboard snapshot"

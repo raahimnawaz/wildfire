@@ -49,16 +49,17 @@ wildfire_output/
 research_extracted.txt
 research_extracted.docx
 
-# Allow-list: ship the latest real-data dashboard snapshot as a deployable artifact.
-# (GitHub Actions has no GEE creds, so the gh-pages live URL serves this fixed
-#  Sept 15 2025 snapshot instead of fake synthetic data.)
+# Allow-list: ship real-data dashboard snapshots as deployable artifacts.
+# (GitHub Actions has no GEE creds; the gh-pages workflow deploys the newest
+#  committed snapshot instead of rendering fake synthetic data. Heavy per-run
+#  files — geojson, dashboard html — stay ignored.)
 !wildfire_output/
 wildfire_output/*
-!wildfire_output/2025-09-15/
-wildfire_output/2025-09-15/*
-!wildfire_output/2025-09-15/heatmap_2025-09-15.html
-!wildfire_output/2025-09-15/summary_2025-09-15.json
-!wildfire_output/2025-09-15/ignition_2025-09-15.parquet
+!wildfire_output/20*/
+wildfire_output/20*/*
+!wildfire_output/20*/heatmap_*.html
+!wildfire_output/20*/summary_*.json
+!wildfire_output/20*/ignition_*.parquet
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Trained model artifacts — large, regenerable from training scripts

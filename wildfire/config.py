@@ -1,12 +1,15 @@
 """
 Central configuration for the West Coast wildfire predictor.
 
-All choices below are taken directly from the research paper:
-  - West Coast bbox and fire-season window
-  - 4 km cell resolution
-  - Out-of-time train/test split (random K-fold causes fatal leakage)
-  - Operational decision threshold of 0.60
-  - Feature list spanning ERA5-Land, SRTM, SMAP, KBDI, Sentinel-2 NDVI
+Key choices follow the project's research doc ("Comprehensive Analysis of
+Wildfire Prediction"), adapted where real-data iteration disagreed with it:
+  - West Coast bbox and Aug-Oct fire-season window
+  - 2 km cell resolution (the doc's 4 km blurred out too many positive labels)
+  - Out-of-time train/val/test split by year (random K-fold leaks temporally)
+  - The operational decision threshold is tuned on the validation year during
+    training and stored in model metadata; decision_threshold below is only a
+    last-resort fallback for legacy metadata
+  - Feature list spanning ERA5-Land, SRTM, SMAP, KBDI, MODIS NDVI
 """
 
 from dataclasses import dataclass, field
@@ -28,6 +31,10 @@ class WildfireConfig:
 
     # Temporal — fire season Aug 1 to Oct 31 (covers Santa Ana / Diablo wind events)
     fire_season_months: tuple = (8, 9, 10)
+    # Seasons available on disk / to extract. Real training passes explicit
+    # parquets (train = all but last two, val = second-last, test = last);
+    # train_year/test_year only drive the synthetic-mode split.
+    data_years: tuple = (2020, 2021, 2022, 2023, 2024, 2025)
     train_year: int = 2022
     test_year: int = 2023
 
@@ -36,9 +43,6 @@ class WildfireConfig:
     gee_pages_per_window: int = 40  # 4x bumped for 2km: keeps coverage at ~30% of cells
     gee_tile_scale: int = 4
     gee_seed: int = 42
-
-    # FIRMS confidence threshold (% for MODIS T21)
-    firms_min_confidence: int = 30
 
     # Features — keep names stable; train/predict both consume this list
     feature_columns: List[str] = field(
@@ -52,7 +56,7 @@ class WildfireConfig:
             "soil_moist_surf", # SMAP 0-10 cm volumetric, m^3/m^3
             "soil_moist_root", # ERA5 root-zone (28-100 cm)
             "kbdi_index",      # Keetch-Byram Drought Index, 0-800
-            "ndvi",            # Sentinel-2 (or MODIS) NDVI, -1..1
+            "ndvi",            # MODIS MOD13Q1 16-day NDVI, -1..1
             "elevation_m",     # SRTM
             "slope_deg",       # derived from SRTM
             "aspect_deg",      # derived from SRTM
@@ -62,7 +66,7 @@ class WildfireConfig:
     )
     target_column: str = "fire_occurred"
 
-    # Class-imbalance handling (paper's preferred domain-guided injection)
+    # Class-imbalance handling (research doc's domain-guided injection)
     minority_oversample_factor: int = 30   # duplicate fire rows N times before perturbation
     majority_downsample_ratio: int = 10    # final neg:pos ratio cap
     extreme_temp_bump_c: float = 10.0
@@ -70,7 +74,7 @@ class WildfireConfig:
     extreme_kbdi_floor: float = 750.0
     extreme_rh_ceiling_pct: float = 15.0
 
-    # XGBoost hyperparameters — paper's reference baseline
+    # XGBoost hyperparameters — research doc's reference baseline
     xgb_n_estimators: int = 500
     xgb_learning_rate: float = 0.05
     xgb_max_depth: int = 6
@@ -79,7 +83,10 @@ class WildfireConfig:
     xgb_tree_method: str = "hist"
     xgb_device: str = "cpu"   # set to "cuda" if a GPU + cuDF stack is available
 
-    # Operational decision threshold (NOT 0.5 — paper-validated)
+    # Legacy fallback ONLY. The live operational threshold is tuned on the
+    # validation year during training and read from feature_meta.json
+    # (see predict.resolve_threshold). This constant applies just when metadata
+    # predates threshold tuning.
     decision_threshold: float = 0.60
 
     # Persistence

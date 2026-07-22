@@ -185,23 +185,29 @@ def _train_spread() -> None:
 # GEE / ignition pipeline
 # ---------------------------------------------------------------------------
 
-def _gee_extract_year(year: int) -> Path:
-    out = CFG.data_dir / f"raw_{year}.parquet"
+def _gee_extract_year(year: int, months: tuple | None = None, suffix: str = "") -> Path:
+    out = CFG.data_dir / f"raw_{year}{suffix}.parquet"
     if out.exists() and out.stat().st_size > 1000:
         print(f"[gee] {out} already exists — skip extraction")
         return out
-    print(f"[gee] extracting fire-season {year} (this takes ~10 min) ...")
+    label = "shoulder-season" if months else "fire-season"
+    print(f"[gee] extracting {label} {year} (this takes ~10 min) ...")
     cmd = [sys.executable, "-m", "wildfire.data_extraction", "--year", str(year), "--out", str(out)]
+    if months:
+        cmd += ["--months", ",".join(str(m) for m in months)]
     subprocess.run(cmd, check=True)
     return out
 
 
-def _train_ignition(train_path: Path, test_path: Path) -> None:
-    print("\n[ignition] training XGBoost on real GEE data ...")
+def _train_ignition(train_paths: list[Path], val_paths: list[Path], test_paths: list[Path]) -> None:
+    print("\n[ignition] training XGBoost on real GEE data "
+          "(threshold tuned on validation year, production refit on all years) ...")
     cmd = [
         sys.executable, "-m", "wildfire.train",
-        "--train", str(train_path),
-        "--test",  str(test_path),
+        "--train", *[str(p) for p in train_paths],
+        "--val",   *[str(p) for p in val_paths],
+        "--test",  *[str(p) for p in test_paths],
+        "--refit-all",
     ]
     subprocess.run(cmd, check=True)
 
@@ -239,9 +245,16 @@ def main() -> int:
     if _gee_ok():
         print("\n[ok] Earth Engine credentials detected -> running ignition pipeline")
         try:
-            train_path = _gee_extract_year(CFG.train_year)
-            test_path  = _gee_extract_year(CFG.test_year)
-            _train_ignition(train_path, test_path)
+            # Extract every configured year: Aug-Oct fire season plus the
+            # May-Jul shoulder season so the model covers May-October. The
+            # last year is the test holdout, second-to-last the validation
+            # year for threshold tuning; production refits on everything.
+            season   = [_gee_extract_year(y) for y in CFG.data_years]
+            shoulder = [_gee_extract_year(y, months=(5, 6, 7), suffix="_preseason")
+                        for y in CFG.data_years]
+            _train_ignition(train_paths=season[:-2] + shoulder[:-2],
+                            val_paths=[season[-2], shoulder[-2]],
+                            test_paths=[season[-1], shoulder[-1]])
             did_anything = True
         except subprocess.CalledProcessError as e:
             print(f"[!] GEE pipeline step failed: {e}", file=sys.stderr)

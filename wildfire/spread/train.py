@@ -35,9 +35,15 @@ from .model import build_model
 
 def _split_dataset(ds: Dataset, seed: int = 0) -> Tuple[Dataset, Dataset, Dataset]:
     if isinstance(ds, IterableDataset):
-        # Iterable streams (TFRecord) can't be trivially indexed-split — caller
-        # should pre-split shards into train/val/test directories.
-        return ds, ds, ds
+        # Iterable streams (TFRecord) can't be index-split; silently reusing
+        # the training stream as val/test would report metrics computed on
+        # training data. Refuse instead.
+        raise SystemExit(
+            "--source ndws-tfrecord streams an IterableDataset that cannot be "
+            "split into train/val/test. Convert the shards to numpy first "
+            "(python -m wildfire.spread.convert_ndws) and rerun with "
+            "--source ndws-split, which uses the official NDWS split."
+        )
 
     n = len(ds)
     rng = np.random.default_rng(seed)

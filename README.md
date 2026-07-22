@@ -13,7 +13,7 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
-| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.782** · AP 0.006 · 12.5% precision at threshold 0.43 | 5 yrs (2020-2024) train at 2 km / 2025 holdout |
+| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.778** · AP 0.011 (~7× the 0.0015 base rate) at 2 km | Train 2020-2023 · threshold tuned on 2024 val · tested once on 2025 · production refit on all six seasons |
 | **U-Net spread** | Per-pixel next-day fire mask | ROC-AUC **0.903** · AUC-PR **0.295** | Matches Huot et al. ICDM 2022 |
 
 ## What this is
@@ -21,10 +21,14 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 Two complementary models that together cover the wildfire-prediction lifecycle:
 
 1. **Ignition** — "where might a fire START in the next week?" Boosted-tree
-   classifier on 2.4M live GEE-extracted West Coast cells (2020-2024),
-   evaluated out-of-time on the 2025 fire season. Top feature importances
-   (KBDI drought + wind speed = 96% of signal) match the published wildfire
-   physics literature.
+   classifier on 11.5M live GEE-extracted West Coast cells spanning six fire
+   seasons (2020-2025). Evaluation is fully out-of-time: train 2020-2023,
+   alert threshold tuned on held-out 2024, tested exactly once on 2025 —
+   then the shipped production model is refit on all six seasons. Top
+   feature importances (KBDI drought + wind speed) are consistent with the
+   wildfire physics literature, with a caveat stated plainly: the
+   domain-guided augmentation pushes synthetic positives into exactly those
+   regimes, so the importances partly reflect the training design.
 2. **Spread** — "given a fire is burning, what does tomorrow's perimeter look
    like?" U-Net segmentation on 64×64 km imagery patches with 11 channels
    (elevation, slope, aspect, NDVI, temp, dewpoint, wind u/v, KBDI, soil
@@ -120,13 +124,16 @@ Three non-obvious things that took real iteration to get right:
    each under the limit, then concatenated and deduplicated by (lon, lat).
    Effective 10× density at the same per-call cost. See `extract_window()`.
 
-3. **Data-driven threshold tuning.** Hardcoded operational threshold = 0.60
-   produced zero alerts on the 2025 test set (predictions were calibrated
-   low). The model's PR curve actually peaks at threshold 0.168 — at that
-   threshold we get 12 true-positive alerts on 673 actual fires. The tuned
-   threshold is computed from the test-set PR curve during training and
-   persisted to model metadata, then read at inference time. See
-   `_tune_threshold()` in [wildfire/train.py](wildfire/train.py).
+3. **Leak-free threshold tuning.** The hardcoded operational threshold =
+   0.60 produced zero alerts on real data — the fire base rate is ~0.15%,
+   so calibrated probabilities rarely cross 0.60 even when the ranking is
+   good. The threshold is now tuned from the PR curve on a held-out
+   VALIDATION year (2024), frozen into model metadata, and the test year
+   (2025) sees it exactly once. (An earlier version tuned on the test set
+   itself, which inflated the reported precision — fixed, and worth
+   admitting.) `predict.py` and the dashboard read the tuned value from
+   metadata at inference time. See `_tune_threshold()` in
+   [wildfire/train.py](wildfire/train.py).
 
 ## Testing
 
@@ -135,14 +142,19 @@ pip install -r wildfire/requirements.txt
 pytest tests/ -q
 ```
 
-26 smoke tests covering cache hit/miss, feature math (wind speed, RH, VPD,
-calendar), imbalance handling, threshold tuning, and synthetic-data schema.
-All run CPU-only with no external dependencies (no GEE, no GPU).
+30 smoke tests covering cache hit/miss, feature math (wind speed, RH, VPD,
+dewpoint inversion, calendar), imbalance handling — including thermodynamic
+consistency of augmented rows — out-of-time validation splitting, threshold
+tuning, and synthetic-data schema. All run CPU-only with no external
+dependencies (no GEE, no GPU).
 
 ## Verification & live runs
 
-A live, daily-refreshed dashboard is auto-deployed via GitHub Actions —
-see [.github/workflows/daily-dashboard.yml](.github/workflows/daily-dashboard.yml).
+The newest committed real-data dashboard snapshot is auto-published to
+GitHub Pages by GitHub Actions (redeployed nightly; the data itself
+refreshes when a new dashboard run is committed — CI holds no GEE
+credentials, so it never renders synthetic stand-in data). See
+[.github/workflows/daily-dashboard.yml](.github/workflows/daily-dashboard.yml).
 A long-form engineering writeup is in [WRITEUP.md](WRITEUP.md).
 
 ## License

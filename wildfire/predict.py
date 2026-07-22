@@ -41,17 +41,28 @@ def _load_model():
     return model, meta
 
 
+def resolve_threshold(meta: dict) -> float:
+    """
+    Operational threshold precedence: validation-tuned value in current
+    metadata -> legacy metadata locations -> CFG fallback. Explicit None
+    checks so a legitimate 0.0 threshold would not fall through.
+    """
+    for candidate in (
+        meta.get("operational_threshold"),
+        (meta.get("metrics") or {}).get("operational_threshold"),
+        meta.get("decision_threshold"),
+    ):
+        if candidate is not None:
+            return float(candidate)
+    return float(CFG.decision_threshold)
+
+
 def score_dataframe(df: pd.DataFrame, threshold: float | None = None) -> pd.DataFrame:
     """Append fire_probability and fire_alert columns. Non-destructive."""
     model, meta = _load_model()
     if threshold is None:
-        # Prefer the operational threshold tuned on test set (post-training),
-        # fall back to decision_threshold for older models, then CFG default.
-        threshold = (
-            meta.get("metrics", {}).get("operational_threshold")
-            or meta.get("decision_threshold")
-            or CFG.decision_threshold
-        )
+        # Operational threshold tuned on the validation year during training.
+        threshold = resolve_threshold(meta)
 
     # If the dataframe already has the engineered features we still want to be
     # idempotent — derive_all is safe to call.

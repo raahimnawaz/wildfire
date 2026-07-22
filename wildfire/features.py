@@ -29,6 +29,19 @@ def vpd_kpa(temp_c, rh_pct):
     return np.clip(es_kpa * (1.0 - rh_pct / 100.0), 0.0, None)
 
 
+def dewpoint_c_from_rh(temp_c, rh_pct):
+    """
+    Invert the August–Roche–Magnus approximation: recover the dewpoint that
+    is thermodynamically consistent with a given (temperature, RH) pair.
+    Uses the same constants as relative_humidity_pct so the round trip
+    dewpoint -> RH -> dewpoint is exact.
+    """
+    a, b = 17.625, 243.04
+    rh = np.clip(rh_pct, 1.0, 100.0)  # log(0) guard
+    gamma = np.log(rh / 100.0) + (a * temp_c) / (b + temp_c)
+    return b * gamma / (a - gamma)
+
+
 def wind_speed_ms(u, v):
     return np.sqrt(u * u + v * v)
 

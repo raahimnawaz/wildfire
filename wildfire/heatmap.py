@@ -232,12 +232,19 @@ def _hud_shell(map_html: str, scored: pd.DataFrame, meta: dict,
     n_alerts     = int(summary["n_high_risk_cells"])
     peak_p       = float(summary["max_ignition_probability"])
     mean_p       = float(summary["mean_ignition_probability"])
-    threshold    = float(meta.get("decision_threshold", CFG.decision_threshold))
-    test_metrics = (meta.get("metrics") or {})
+    from .predict import resolve_threshold
+    threshold    = resolve_threshold(meta)  # the value fire_alert actually uses
+    metrics      = (meta.get("metrics") or {})
+    test_metrics = metrics.get("test") or metrics  # new nested layout, legacy flat fallback
     auc          = test_metrics.get("roc_auc", float("nan"))
     ap           = test_metrics.get("average_precision", float("nan"))
-    train_year   = meta.get("train_year", "—")
-    test_year    = meta.get("test_year", "—")
+    data_info    = meta.get("data") or {}
+    train_year   = ("-".join(str(y) for y in data_info["train_years"])
+                    if data_info.get("train_years") else meta.get("train_year", "—"))
+    test_year    = ("-".join(str(y) for y in data_info["test_years"])
+                    if data_info.get("test_years") else meta.get("test_year", "—"))
+    prod_years   = data_info.get("production_years") or []
+    prod_label   = (f"{prod_years[0]}-{prod_years[-1]}" if prod_years else train_year)
 
     top10 = scored.sort_values("fire_probability", ascending=False).head(10)
     top_rows = "".join(
@@ -367,7 +374,7 @@ tr.clickable:active td {{ background: #00d4ff22; }}
       <div class="kpi {'alert' if n_alerts > 0 else 'ok'}"><div class="l">High-risk alerts</div><div class="v">{n_alerts}</div></div>
       <div class="kpi crit"><div class="l">Peak ignition p</div><div class="v">{peak_p:.3f}</div></div>
       <div class="kpi"><div class="l">Mean ignition p</div><div class="v">{mean_p:.4f}</div></div>
-      <div class="kpi ok"><div class="l">Threshold</div><div class="v">{threshold:.2f}</div></div>
+      <div class="kpi ok"><div class="l">Threshold</div><div class="v">{threshold:.3f}</div></div>
       <div class="kpi"><div class="l">Model AUC</div><div class="v">{auc:.3f}</div></div>
     </div>
 
@@ -385,13 +392,12 @@ tr.clickable:active td {{ background: #00d4ff22; }}
     {fi_svg}
 
     <div class="meta">
-      <b>MODEL</b> XGBoost binary classifier, 500 trees, depth 6<br>
-      <b>TRAIN</b> {train_year} fire season (out-of-time)<br>
-      <b>TEST</b>  {test_year} fire season<br>
+      <b>MODEL</b> XGBoost binary classifier, 500 trees, depth 6 · production fit {prod_label}<br>
+      <b>EVAL</b> train {train_year} · threshold tuned on validation · tested out-of-time {test_year}<br>
       <b>FEATURES</b> ERA5-Land · SRTM · NASA SMAP · KBDI · MODIS NDVI<br>
       <b>LABELS</b> NASA FIRMS MODIS T21 thermal anomalies<br>
       <b>METRICS</b> ROC-AUC {auc:.3f} · AUC-PR {ap:.4f}<br>
-      <b>FRAME</b> EPSG:4326 · ~4 km cells · 7-day window
+      <b>FRAME</b> EPSG:4326 · ~{CFG.cell_scale_m / 1000:g} km cells · 7-day window
     </div>
   </div>
 </div>

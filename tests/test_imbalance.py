@@ -40,6 +40,20 @@ def test_perturbed_minority_pushed_to_extreme_regimes(small_synthetic_df):
     assert out_pos["rh_pct"].mean() < pos["rh_pct"].mean()
 
 
+def test_rebalance_keeps_thermodynamics_consistent(small_synthetic_df):
+    """Perturbed rows must stay on the Magnus curve: RH re-derived from the
+    (temp, dewpoint) pair matches the stored rh_pct column."""
+    from wildfire.features import derive_all, relative_humidity_pct, vpd_kpa
+    derived = derive_all(small_synthetic_df)
+    out = rebalance_training_set(derived)
+
+    rh_check = relative_humidity_pct(out["temp_c"].values, out["dewpoint_c"].values)
+    assert np.allclose(rh_check, out["rh_pct"].values, atol=0.5)
+
+    vpd_check = vpd_kpa(out["temp_c"].values, out["rh_pct"].values)
+    assert np.allclose(vpd_check, out["vpd_kpa"].values, atol=1e-3)
+
+
 def test_scale_pos_weight_matches_ratio(small_synthetic_df):
     out = rebalance_training_set(small_synthetic_df)
     spw = scale_pos_weight(out)

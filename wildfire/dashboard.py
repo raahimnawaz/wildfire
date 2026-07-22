@@ -43,24 +43,44 @@ import pandas as pd
 from .config import CFG
 
 
-def _ignition_scores(target_date: str) -> pd.DataFrame:
-    """Pull a fresh GEE window and score with the XGBoost ignition model."""
+def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
+    """Pull a fresh GEE window and score with the XGBoost ignition model.
+
+    ERA5-Land lags realtime by ~5 days, so a 7-day window ending today can
+    come back thin or empty. If that happens, walk the window back in 2-day
+    steps (up to 8 days) and report the window actually used.
+    """
     from .data_extraction import init_ee, extract_window
     from .predict import score_dataframe
 
     init_ee()
 
-    end = datetime.strptime(target_date, "%Y-%m-%d").date()
-    start = end - timedelta(days=7)
-    print(f"[ignition] pulling fresh GEE features for {start} .. {end} ...")
+    target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    last_err: Optional[Exception] = None
+    for shift_days in (0, 2, 4, 6, 8):
+        end = target - timedelta(days=shift_days)
+        start = end - timedelta(days=7)
+        print(f"[ignition] pulling fresh GEE features for {start} .. {end} ...")
+        try:
+            df = extract_window(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        except Exception as e:  # GEE raises on fully-empty ERA5 windows
+            print(f"[ignition]   window failed ({e}); trying an earlier window ...", file=sys.stderr)
+            last_err = e
+            continue
+        if df.empty:
+            print("[ignition]   window returned no rows (data latency); trying an earlier window ...")
+            continue
+        if shift_days:
+            print(f"[ignition] note: freshest complete data window is {start} .. {end} "
+                  f"({shift_days} days behind the target date)")
+        print(f"[ignition] scoring {len(df):,} cells ...")
+        scored = score_dataframe(df)
+        return scored, (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
 
-    df = extract_window(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-    if df.empty:
-        raise RuntimeError("No data returned from GEE. Check auth/quota.")
-
-    print(f"[ignition] scoring {len(df):,} cells ...")
-    scored = score_dataframe(df)
-    return scored
+    raise RuntimeError(
+        f"No data returned from GEE for any window near {target_date}. "
+        f"Check auth/quota. Last error: {last_err}"
+    )
 
 
 def _spread_predictions(scored: pd.DataFrame,
@@ -146,7 +166,18 @@ def _spread_predictions(scored: pd.DataFrame,
     }
 
 
-def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_date: str) -> None:
+def _resolve_meta_threshold() -> float:
+    """The threshold actually applied to fire_alert (validation-tuned, from
+    model metadata) — shown in the HTML so display matches behavior."""
+    from .predict import resolve_threshold
+    meta = {}
+    if CFG.feature_meta_path().exists():
+        meta = json.loads(CFG.feature_meta_path().read_text())
+    return resolve_threshold(meta)
+
+
+def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_date: str,
+                   data_window: tuple[str, str] | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Tabular output — every cell with ignition probability
@@ -174,14 +205,22 @@ def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_dat
     (out_dir / f"ignition_{target_date}.geojson").write_text(json.dumps(geojson))
 
     # Summary JSON (always lightweight)
+    target_month = datetime.strptime(target_date, "%Y-%m-%d").month
     summary = {
         "target_date": target_date,
+        "data_window": {"start": data_window[0], "end": data_window[1]} if data_window else None,
+        "operational_threshold": _resolve_meta_threshold(),
         "n_cells_scored": int(len(scored)),
         "n_high_risk_cells": int((scored["fire_alert"] == 1).sum()),
         "max_ignition_probability": float(scored["fire_probability"].max()),
         "mean_ignition_probability": float(scored["fire_probability"].mean()),
         "spread_predictions": spread,
     }
+    if target_month not in CFG.fire_season_months:
+        summary["out_of_season_note"] = (
+            f"Target month {target_month} is outside the Aug-Oct training season; "
+            "the model is extrapolating on the calendar features."
+        )
     (out_dir / f"summary_{target_date}.json").write_text(json.dumps(summary, indent=2, default=str))
 
     # Single-page HTML dashboard
@@ -255,8 +294,11 @@ tr:nth-child(even) {{ background: #fafafa; }}
   <li><code>ignition_{target_date}.geojson</code> — for QGIS / web maps</li>
   <li><code>summary_{target_date}.json</code> — top-level metrics</li>
 </ul>
-<p class="meta">Operational threshold: {CFG.decision_threshold} for ignition alerts.
-Spread predictions run U-Net on synthesized patches around top-risk cells —
+<p class="meta">Operational threshold: {summary["operational_threshold"]:.3f} for ignition alerts
+(tuned on the validation year, read from model metadata).
+{f"Data window: {summary['data_window']['start']} → {summary['data_window']['end']}." if summary.get("data_window") else ""}
+{f"<br><b>Note:</b> {summary['out_of_season_note']}" if summary.get("out_of_season_note") else ""}
+<br>Spread predictions run U-Net on real GEE imagery patches around top-risk cells —
 research/triage signal, not perimeter-accurate forecasts.</p>
 </body></html>
 """
@@ -277,9 +319,9 @@ def main():
 
     out_dir = args.out or Path(__file__).resolve().parent.parent / "wildfire_output" / args.date
 
-    scored = _ignition_scores(args.date)
+    scored, data_window = _ignition_scores(args.date)
     spread = {} if args.ignition_only else _spread_predictions(scored, top_k=args.top_k, target_date=args.date)
-    _write_outputs(scored, spread, out_dir, args.date)
+    _write_outputs(scored, spread, out_dir, args.date, data_window=data_window)
 
     # Render the HUD heatmap (satellite-style visualization)
     try:

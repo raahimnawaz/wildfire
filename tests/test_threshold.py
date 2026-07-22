@@ -1,9 +1,10 @@
-"""Data-driven threshold tuning from the PR curve."""
+"""Data-driven threshold tuning from the PR curve + out-of-time validation split."""
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from wildfire.train import _tune_threshold
+from wildfire.train import _temporal_val_split, _tune_threshold
 
 
 def test_tune_threshold_picks_f1_optimum():
@@ -31,6 +32,23 @@ def test_tune_threshold_reports_all_three_strategies():
     for k in ("f1", "youden", "precision@0.10"):
         assert k in out
         assert "threshold" in out[k]
+
+
+def test_temporal_val_split_is_out_of_time():
+    """Validation rows must come strictly AFTER every training row — the
+    threshold is tuned on them, so a random row split would leak."""
+    rng = np.random.default_rng(0)
+    n_dates, per_day = 50, 20
+    df = pd.DataFrame({
+        "date": pd.date_range("2022-08-01", periods=n_dates, freq="D").repeat(per_day),
+        "temp_c": rng.random(n_dates * per_day),
+        "fire_occurred": (rng.random(n_dates * per_day) < 0.1).astype(int),
+    })
+    train, val = _temporal_val_split(df, frac=0.2)
+
+    assert len(train) + len(val) == len(df)
+    assert pd.to_datetime(train["date"]).max() < pd.to_datetime(val["date"]).min()
+    assert 0.1 < len(val) / len(df) < 0.3  # roughly the requested fraction
 
 
 def test_tune_threshold_handles_perfect_predictor():

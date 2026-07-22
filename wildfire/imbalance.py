@@ -2,7 +2,8 @@
 Class-imbalance handling for wildfire ignition data.
 
 Why a custom routine instead of plain SMOTE:
-  The paper recommends *domain-guided* synthetic minority injection. Pure SMOTE
+  The project's research doc ("Comprehensive Analysis of Wildfire Prediction")
+  recommends *domain-guided* synthetic minority injection. Pure SMOTE
   interpolates between fire samples without regard for fire physics, so the
   synthetic samples cluster near the existing minority manifold. Bumping the
   perturbed samples toward extreme-fire-weather regimes (hot, dry, windy,
@@ -38,16 +39,24 @@ def _perturb_minority(minority: pd.DataFrame, rng: np.random.Generator) -> pd.Da
             0.0, 800.0,
         )
     if "rh_pct" in out:
+        # Floor at 1% (not 0): record-low fire-weather RH is a few percent,
+        # and the dewpoint inversion below is undefined at RH=0.
         out["rh_pct"] = np.clip(
             np.minimum(out["rh_pct"], CFG.extreme_rh_ceiling_pct) + noise(2.0, n),
-            0.0, 100.0,
+            1.0, 100.0,
         )
     if "soil_moist_surf" in out:
         out["soil_moist_surf"] = np.clip(out["soil_moist_surf"] * 0.5 + noise(0.01, n), 0.0, 1.0)
     if "soil_moist_root" in out:
         out["soil_moist_root"] = np.clip(out["soil_moist_root"] * 0.6 + noise(0.01, n), 0.0, 1.0)
+    # Keep the thermodynamic triple (temp, dewpoint, RH) physically consistent:
+    # temp and RH were just perturbed independently, so dewpoint and VPD are
+    # re-derived from the perturbed pair instead of carrying stale values that
+    # sit off the Magnus curve.
     if {"temp_c", "rh_pct"}.issubset(out.columns):
-        from .features import vpd_kpa
+        from .features import dewpoint_c_from_rh, vpd_kpa
+        if "dewpoint_c" in out.columns:
+            out["dewpoint_c"] = dewpoint_c_from_rh(out["temp_c"], out["rh_pct"])
         out["vpd_kpa"] = vpd_kpa(out["temp_c"], out["rh_pct"])
 
     return out
@@ -58,9 +67,14 @@ def rebalance_training_set(
     seed: int = CFG.gee_seed,
 ) -> pd.DataFrame:
     """
-    Apply paper-recommended domain-guided synthetic minority injection followed
-    by majority downsampling so the final neg:pos ratio is at most
+    Apply domain-guided synthetic minority injection (per the research doc)
+    followed by majority downsampling so the final neg:pos ratio is at most
     `CFG.majority_downsample_ratio`. Returns a shuffled dataframe.
+
+    Note: because the injected positives are deliberately pushed toward
+    extreme fire weather, feature importances of the drought/wind features are
+    partly shaped by this augmentation — compare against a no-injection run
+    before reading physics into them.
     """
     rng = np.random.default_rng(seed)
     target = CFG.target_column

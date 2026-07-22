@@ -116,32 +116,39 @@ python -m wildfire.setup_gee
 You should see "OK — got N sampled pixels" and a sample row of ERA5 +
 FIRMS values. If anything fails, the script tells you exactly what's wrong.
 
-### 5. Pull two real fire seasons (~10 min each)
+### 5. Pull real fire seasons (~10 min each)
 
 ```powershell
-python -m wildfire.data_extraction --year 2022 --out wildfire_data/raw_2022.parquet
-python -m wildfire.data_extraction --year 2023 --out wildfire_data/raw_2023.parquet
+# One command per season; the full protocol uses 2020-2025
+python -m wildfire.data_extraction --year 2024 --out wildfire_data/raw_2024.parquet
+python -m wildfire.data_extraction --year 2025 --out wildfire_data/raw_2025.parquet
 ```
 
 ### 6. Retrain on real data, out-of-time
 
-Train on as many years as you have, hold out the most recent:
+Train on the older years, tune the alert threshold on the second-newest,
+test once on the newest, then refit the production model on everything:
 
 ```powershell
-# Multi-year training (recommended — more positive labels = stronger model)
+# Full protocol (recommended — every season contributes to the shipped model)
 python -m wildfire.train `
-    --train wildfire_data/raw_2022.parquet wildfire_data/raw_2023.parquet wildfire_data/raw_2024.parquet `
-    --test  wildfire_data/raw_2025.parquet
+    --train wildfire_data/raw_2020.parquet wildfire_data/raw_2021.parquet wildfire_data/raw_2022.parquet wildfire_data/raw_2023.parquet `
+    --val   wildfire_data/raw_2024.parquet `
+    --test  wildfire_data/raw_2025.parquet `
+    --refit-all
 
-# Or single-year (smallest setup)
+# Smallest setup — two years; validation is split off the last ~20% of
+# training dates automatically when --val is omitted
 python -m wildfire.train --train wildfire_data/raw_2022.parquet `
                          --test  wildfire_data/raw_2023.parquet
 ```
 
 Honest expected metrics on real GEE data (depend on cell density + years available):
-- ROC-AUC 0.65-0.80 with paged sampling at 4 km cells
+- ROC-AUC 0.65-0.80 with paged sampling at 2 km cells
 - AUC-PR 0.01-0.10 (fire base rate is ~0.1%, so AP is the honest number)
-- Top features should be KBDI drought + wind speed (matches paper physics)
+- Top features come out as KBDI drought + wind speed — consistent with fire
+  physics, but partly shaped by the domain-guided augmentation, which pushes
+  synthetic positives toward exactly those regimes
 
 Expect ~10 minutes per year on the default sampling density (50k samples per
 window). Bump `gee_num_pixels` in `config.py` for denser sampling at the cost

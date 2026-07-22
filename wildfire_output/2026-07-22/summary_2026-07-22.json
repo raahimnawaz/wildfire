@@ -1,0 +1,85 @@
+{
+  "target_date": "2026-07-22",
+  "data_window": {
+    "start": "2026-07-15",
+    "end": "2026-07-22"
+  },
+  "operational_threshold": 0.08453450351953506,
+  "n_cells_scored": 128549,
+  "n_high_risk_cells": 5026,
+  "max_ignition_probability": 0.6976099014282227,
+  "mean_ignition_probability": 0.023478170856833458,
+  "spread_predictions": {
+    "target_date": "2026-07-22",
+    "top_k": 5,
+    "patch_source": "real_gee_imagery",
+    "patches": [
+      {
+        "longitude": -120.49409424172647,
+        "latitude": 34.58125515541858,
+        "ignition_probability": 0.6976099014282227,
+        "spread_prob_max": 0.009473033249378204,
+        "spread_prob_mean": 3.473892775218701e-06,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.36441934790776,
+        "latitude": 35.97492706064424,
+        "ignition_probability": 0.46890053153038025,
+        "spread_prob_max": 0.0004009786352980882,
+        "spread_prob_mean": 4.866384415436187e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.82696183825924,
+        "latitude": 36.47802579859864,
+        "ignition_probability": 0.4675321578979492,
+        "spread_prob_max": 0.0003165573289152235,
+        "spread_prob_mean": 4.7364443389597e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.82853944728498,
+        "latitude": 36.48305207925036,
+        "ignition_probability": 0.4675321578979492,
+        "spread_prob_max": 0.00036631320836022496,
+        "spread_prob_mean": 4.912542976853729e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -118.2887872813521,
+        "latitude": 35.73780856009182,
+        "ignition_probability": 0.4464302361011505,
+        "spread_prob_max": 9.969237726181746e-05,
+        "spread_prob_mean": 4.360380216894555e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      }
+    ]
+  },
+  "out_of_season_note": "Target month 7 is outside the Aug-Oct training season; the model is extrapolating on the calendar features."
+}

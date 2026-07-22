@@ -329,21 +329,31 @@ def extract_window(day_start: str, day_end: str,
 
 
 def extract_year(year: int, output_path: Optional[Path] = None,
-                 step_days: int = 7) -> pd.DataFrame:
+                 step_days: int = 7,
+                 months: Optional[tuple] = None,
+                 end_date: Optional[str] = None) -> pd.DataFrame:
     """
-    Walk the fire season month-by-month-ish for a given year and concatenate.
-    Use `step_days` to control window size (smaller windows = more samples but
-    higher GEE quota usage).
+    Walk the given months of a year in `step_days` windows and concatenate.
+    Defaults to the Aug-Oct fire season; pass `months` for shoulder-season
+    pulls (e.g. (5, 6, 7)). `end_date` (YYYY-MM-DD) clips the walk — needed
+    when extracting the current year, where windows past ~today would be
+    empty. Use `step_days` to control window size (smaller windows = more
+    samples but higher GEE quota usage).
     """
     init_ee()
 
+    months = tuple(months) if months else CFG.fire_season_months
+    clip = datetime.strptime(end_date, "%Y-%m-%d") if end_date else None
+
     pieces = []
-    for month in CFG.fire_season_months:
+    for month in months:
         start = datetime(year, month, 1)
         if month == 12:
             stop = datetime(year + 1, 1, 1)
         else:
             stop = datetime(year, month + 1, 1)
+        if clip is not None:
+            stop = min(stop, clip)
 
         cursor = start
         while cursor < stop:
@@ -373,10 +383,18 @@ def extract_year(year: int, output_path: Optional[Path] = None,
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Extract GEE features for one fire season.")
+    parser = argparse.ArgumentParser(description="Extract GEE features for part of a year.")
     parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--months", type=str, default=None,
+                        help="Comma-separated month numbers (default: fire season 8,9,10).")
+    parser.add_argument("--end", type=str, default=None,
+                        help="Clip extraction at this date (YYYY-MM-DD) — for the current year.")
     parser.add_argument("--out",  type=Path, default=None,
-                        help="Output parquet path; defaults to wildfire_data/raw_<year>.parquet")
+                        help="Output parquet path; defaults to wildfire_data/raw_<year>.parquet "
+                             "(suffixed with the month list when --months is given).")
     args = parser.parse_args()
-    out = args.out or (CFG.data_dir / f"raw_{args.year}.parquet")
-    extract_year(args.year, output_path=out)
+    months = tuple(int(m) for m in args.months.split(",")) if args.months else None
+    default_name = (f"raw_{args.year}.parquet" if months is None
+                    else f"raw_{args.year}_m{'-'.join(str(m) for m in months)}.parquet")
+    out = args.out or (CFG.data_dir / default_name)
+    extract_year(args.year, output_path=out, months=months, end_date=args.end)

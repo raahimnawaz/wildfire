@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from wildfire.features import (
+    dewpoint_c_from_rh,
     kelvin_to_celsius,
     relative_humidity_pct,
     vpd_kpa,
@@ -29,6 +30,23 @@ def test_relative_humidity_saturation_when_dewpoint_equals_temp():
     # If dewpoint == temperature, air is fully saturated -> RH = 100%
     rh = relative_humidity_pct(np.array([20.0]), np.array([20.0]))
     assert rh[0] == pytest.approx(100.0, abs=0.01)
+
+
+def test_dewpoint_rh_roundtrip():
+    # dewpoint -> RH -> dewpoint must be the identity (same Magnus constants)
+    temps = np.array([10.0, 20.0, 35.0, 40.0])
+    dewps = np.array([5.0, 12.0, 8.0, -2.0])
+    rh = relative_humidity_pct(temps, dewps)
+    recovered = dewpoint_c_from_rh(temps, rh)
+    assert recovered == pytest.approx(dewps, abs=1e-6)
+
+
+def test_dewpoint_never_exceeds_temperature():
+    # Physical bound: dewpoint <= temperature (equality at RH=100)
+    temps = np.linspace(-5.0, 45.0, 20)
+    for rh in (1.0, 30.0, 75.0, 100.0):
+        dew = dewpoint_c_from_rh(temps, np.full_like(temps, rh))
+        assert (dew <= temps + 1e-9).all()
 
 
 def test_vpd_is_nonneg_and_zero_at_saturation():
