@@ -367,6 +367,11 @@ def extract_year(year: int, output_path: Optional[Path] = None,
                 print(f"  ! window failed ({e}); skipping", file=sys.stderr)
                 chunk = pd.DataFrame()
             if not chunk.empty:
+                # Cache-hit pieces round-trip through parquet as
+                # datetime64[us] while fresh pieces are datetime64[ns];
+                # normalize so a resumed (mixed) run can concat.
+                if "date" in chunk.columns:
+                    chunk["date"] = pd.to_datetime(chunk["date"]).astype("datetime64[ns]")
                 pieces.append(chunk)
             cursor = window_end
 

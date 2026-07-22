@@ -54,7 +54,9 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
     keep = [c for c in CFG.feature_columns + [CFG.target_column] if c in df.columns]
     out = df[keep].copy()
     if "date" in df.columns:
-        out["date"] = pd.to_datetime(df["date"])
+        # Parquets written by different pipeline eras store date at different
+        # datetime64 resolutions (ns vs us); normalize so concat works.
+        out["date"] = pd.to_datetime(df["date"]).astype("datetime64[ns]")
     for c in CFG.feature_columns:
         if c in out.columns and out[c].dtype == np.float64:
             out[c] = out[c].astype(np.float32)

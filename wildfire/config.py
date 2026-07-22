@@ -31,6 +31,9 @@ class WildfireConfig:
 
     # Temporal — fire season Aug 1 to Oct 31 (covers Santa Ana / Diablo wind events)
     fire_season_months: tuple = (8, 9, 10)
+    # Months the trained model has actually seen (fire season + May-Jul
+    # shoulder season). Dashboard warns when scoring outside this range.
+    model_coverage_months: tuple = (5, 6, 7, 8, 9, 10)
     # Seasons available on disk / to extract. Real training passes explicit
     # parquets (train = all but last two, val = second-last, test = last);
     # train_year/test_year only drive the synthetic-mode split.

@@ -216,9 +216,9 @@ def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_dat
         "mean_ignition_probability": float(scored["fire_probability"].mean()),
         "spread_predictions": spread,
     }
-    if target_month not in CFG.fire_season_months:
+    if target_month not in CFG.model_coverage_months:
         summary["out_of_season_note"] = (
-            f"Target month {target_month} is outside the Aug-Oct training season; "
+            f"Target month {target_month} is outside the May-Oct training coverage; "
             "the model is extrapolating on the calendar features."
         )
     (out_dir / f"summary_{target_date}.json").write_text(json.dumps(summary, indent=2, default=str))

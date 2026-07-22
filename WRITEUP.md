@@ -114,24 +114,28 @@ validation; the F1-optimal one ships in the model metadata and is what
 
 | Model | Metric | Value | Baseline / paper |
 |---|---|---|---|
-| XGBoost ignition (2 km, 6 seasons) | ROC-AUC (2025 out-of-time) | 0.778 | operational ceiling ~0.85 with 1 km cells |
-| XGBoost ignition (2 km, 6 seasons) | Average Precision | 0.011 | base rate ~0.0015 → ~7× above chance |
-| XGBoost ignition (2 km, 6 seasons) | Recall @ val-tuned threshold 0.085 | 6.8% (precision 1.1%) | leak-free operating point |
+| XGBoost ignition (2 km, May-Oct 2020-2026) | ROC-AUC (2025 out-of-time) | 0.785 | operational ceiling ~0.85 with 1 km cells |
+| XGBoost ignition (2 km, May-Oct 2020-2026) | Average Precision | 0.0055 | base rate ~0.0011 → ~5× above chance |
+| XGBoost ignition (2 km, May-Oct 2020-2026) | Recall @ val-tuned threshold 0.161 | 3.1% (precision 1.6%, 0.2% alert rate) | leak-free operating point |
 | U-Net spread | ROC-AUC (NDWS test) | 0.903 | matches Huot et al. 2022 |
 | U-Net spread | AUC-PR | 0.295 | matches Huot et al. 2022 (~0.30) |
 
 The U-Net is at published-baseline quality. The XGBoost evaluates at
-**0.778 ROC-AUC / 0.011 AP** under the leak-free protocol: train
-2020-2023 (19,173 real fire positives), threshold tuned on 2024
+**0.785 ROC-AUC** under the leak-free protocol on May-October data: train
+2020-2023 (24,518 real fire positives), threshold tuned on 2024
 validation, 2025 test touched exactly once — then the production model
-refits on all six seasons (26,392 positives). Two honest notes: AP
-roughly doubled versus the earlier 3-year run (more seasons genuinely
-help), and the old "12.5% precision at threshold 0.43" headline did NOT
-survive the leak fix — a precision-targeted threshold chosen on
-validation does not transfer to the test year, which is exactly the kind
-of optimism the leaky protocol was hiding. Going to 1 km would likely
-push AUC into the 0.82+ range and is queued as future work — mainly
-limited by GEE quota, not algorithm.
+refits on everything including the 2026 season-to-date (~37K positives,
+~24.5M cells). Honest notes: extending coverage from Aug-Oct to May-Oct
+was driven by a real failure — the fire-season-only model had never seen
+a July day, and when asked to score one it over-fired on 3.9% of cells;
+the May-Oct model alerts on 0.2% at its tuned threshold and its AUC
+*improved* to 0.785. AP reads lower than the season-only run simply
+because the shoulder months halve the base rate. And the old "12.5%
+precision at threshold 0.43" headline did NOT survive the leak fix — a
+precision-targeted threshold chosen on validation does not transfer to
+the test year, which is exactly the optimism the leaky protocol was
+hiding. Going to 1 km would likely push AUC into the 0.82+ range and is
+queued as future work — mainly limited by GEE quota, not algorithm.
 
 ## What would push this further
 

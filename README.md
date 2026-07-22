@@ -13,7 +13,7 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
-| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.778** · AP 0.011 (~7× the 0.0015 base rate) at 2 km | Train 2020-2023 · threshold tuned on 2024 val · tested once on 2025 · production refit on all six seasons |
+| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.785** · AP 0.0055 (~5× the 0.0011 base rate) at 2 km, May-Oct coverage | Train 2020-2023 · threshold tuned on 2024 · tested once on 2025 · production refit on 2020-2026 incl. season-to-date |
 | **U-Net spread** | Per-pixel next-day fire mask | ROC-AUC **0.903** · AUC-PR **0.295** | Matches Huot et al. ICDM 2022 |
 
 ## What this is
@@ -21,14 +21,17 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 Two complementary models that together cover the wildfire-prediction lifecycle:
 
 1. **Ignition** — "where might a fire START in the next week?" Boosted-tree
-   classifier on 11.5M live GEE-extracted West Coast cells spanning six fire
-   seasons (2020-2025). Evaluation is fully out-of-time: train 2020-2023,
-   alert threshold tuned on held-out 2024, tested exactly once on 2025 —
-   then the shipped production model is refit on all six seasons. Top
-   feature importances (KBDI drought + wind speed) are consistent with the
-   wildfire physics literature, with a caveat stated plainly: the
-   domain-guided augmentation pushes synthetic positives into exactly those
-   regimes, so the importances partly reflect the training design.
+   classifier on ~24.5M live GEE-extracted West Coast cells covering
+   May-October of 2020-2026 (fire season plus the shoulder season, so
+   early-season predictions are in-distribution rather than calendar
+   extrapolation). Evaluation is fully out-of-time: train 2020-2023, alert
+   threshold tuned on held-out 2024, tested exactly once on 2025 — then the
+   shipped production model is refit on everything, including the 2026
+   season-to-date. Top feature importances (KBDI drought + wind speed) are
+   consistent with the wildfire physics literature, with a caveat stated
+   plainly: the domain-guided augmentation pushes synthetic positives into
+   exactly those regimes, so the importances partly reflect the training
+   design.
 2. **Spread** — "given a fire is burning, what does tomorrow's perimeter look
    like?" U-Net segmentation on 64×64 km imagery patches with 11 channels
    (elevation, slope, aspect, NDVI, temp, dewpoint, wind u/v, KBDI, soil
