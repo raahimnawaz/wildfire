@@ -1,0 +1,84 @@
+{
+  "target_date": "2026-07-22",
+  "data_window": {
+    "start": "2026-07-15",
+    "end": "2026-07-22"
+  },
+  "operational_threshold": 0.16099536418914795,
+  "n_cells_scored": 128549,
+  "n_high_risk_cells": 2643,
+  "max_ignition_probability": 0.5540781021118164,
+  "mean_ignition_probability": 0.038347240537405014,
+  "spread_predictions": {
+    "target_date": "2026-07-22",
+    "top_k": 5,
+    "patch_source": "real_gee_imagery",
+    "patches": [
+      {
+        "longitude": -120.42912507843695,
+        "latitude": 44.83404733943436,
+        "ignition_probability": 0.5540781021118164,
+        "spread_prob_max": 0.00031112736905924976,
+        "spread_prob_mean": 5.282812480800203e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.4097577009133,
+        "latitude": 44.938574375868114,
+        "ignition_probability": 0.5339463353157043,
+        "spread_prob_max": 0.00023591505305375904,
+        "spread_prob_mean": 4.792565277966787e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.3639058948351,
+        "latitude": 44.87149498807655,
+        "ignition_probability": 0.5099271535873413,
+        "spread_prob_max": 0.00036907996400259435,
+        "spread_prob_mean": 5.395113475969993e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.36189495234707,
+        "latitude": 44.90218743483358,
+        "ignition_probability": 0.5076414346694946,
+        "spread_prob_max": 0.0003533360140863806,
+        "spread_prob_mean": 5.229428552411264e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      },
+      {
+        "longitude": -120.58495033753175,
+        "latitude": 44.79108303718618,
+        "ignition_probability": 0.5071755647659302,
+        "spread_prob_max": 0.00025080388877540827,
+        "spread_prob_mean": 4.916140596833429e-07,
+        "spread_pixels_above_50pct": 0,
+        "spread_mask_shape": [
+          64,
+          64
+        ],
+        "patch_source": "real_gee_imagery"
+      }
+    ]
+  }
+}
