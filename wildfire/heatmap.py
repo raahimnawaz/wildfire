@@ -32,9 +32,63 @@ from typing import Optional
 import folium
 from folium.plugins import HeatMap
 from branca.colormap import LinearColormap
+from branca.element import MacroElement
+from jinja2 import Template
 import pandas as pd
 
 from .config import CFG
+
+
+# Zoom level above which the heat layer is hidden. A heatmap is a density
+# estimate over a 2 km grid: it reads well at regional zoom, but zoomed in the
+# kernels smear into big blurry washes that cover the basemap and imply spatial
+# precision the model does not have. Past this level the crisp high-risk markers
+# carry the information instead.
+HEAT_HIDE_ABOVE_ZOOM = 9
+
+
+class ZoomAwareLayer(MacroElement):
+    """Hide a layer once the map is zoomed in past `hide_above`.
+
+    Restores it on zooming back out, but respects the user: if they switch the
+    layer off by hand in the layer control, it stays off until they switch it
+    back on.
+    """
+
+    _template = Template("""
+        {% macro script(this, kwargs) %}
+        (function () {
+            var map = {{ this._parent.get_name() }};
+            var layer = {{ this.layer.get_name() }};
+            var hideAbove = {{ this.hide_above }};
+            var userOff = false;
+
+            map.on('overlayremove', function (e) {
+                if (e.layer === layer && map.getZoom() <= hideAbove) { userOff = true; }
+            });
+            map.on('overlayadd', function (e) {
+                if (e.layer === layer) { userOff = false; }
+            });
+
+            function sync() {
+                var tooClose = map.getZoom() > hideAbove;
+                if (tooClose || userOff) {
+                    if (map.hasLayer(layer)) { map.removeLayer(layer); }
+                } else if (!map.hasLayer(layer)) {
+                    map.addLayer(layer);
+                }
+            }
+            map.on('zoomend', sync);
+            sync();
+        })();
+        {% endmacro %}
+    """)
+
+    def __init__(self, layer, hide_above: int = HEAT_HIDE_ABOVE_ZOOM):
+        super().__init__()
+        self._name = "ZoomAwareLayer"
+        self.layer = layer
+        self.hide_above = int(hide_above)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,13 +140,13 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
         [float(r["latitude"]), float(r["longitude"]), float(r["fire_probability"])]
         for _, r in scored.iterrows()
     ]
-    HeatMap(
+    heat = HeatMap(
         heat_data,
-        name="Ignition heat",
+        name=f"Ignition heat (regional, zoom ≤ {HEAT_HIDE_ABOVE_ZOOM})",
         radius=10,           # tighter footprint reduces offshore bleed from coastal cells
         blur=12,
         min_opacity=0.35,
-        max_zoom=10,
+        max_zoom=HEAT_HIDE_ABOVE_ZOOM,   # reach full intensity by the hide threshold
         gradient={
             "0.0":  "#0a4a6e",
             "0.25": "#00d4ff",
@@ -100,7 +154,12 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
             "0.75": "#ff6b00",
             "1.0":  "#ff1744",
         },
-    ).add_to(fmap)
+    )
+    heat.add_to(fmap)
+    # Drop the heat layer once zoomed past regional scale — the kernels smear
+    # into a wash that hides the basemap, and the high-risk markers below are
+    # the honest representation at that scale.
+    ZoomAwareLayer(heat, HEAT_HIDE_ABOVE_ZOOM).add_to(fmap)
 
     # Crisp circle markers ONLY for the most at-risk cells (top 1% or anything >= 0.4)
     p_cutoff = max(0.4, float(scored["fire_probability"].quantile(0.99)))
