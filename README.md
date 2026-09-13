@@ -67,6 +67,7 @@ wildfire/
   train.py             XGBoost training with out-of-time validation + threshold tuning
   predict.py           XGBoost scoring CLI
   dashboard.py         combined ignition + spread CLI
+  service.py           interactive per-point risk API (FastAPI)
   heatmap.py           satellite-style HUD heatmap (folium + custom shell)
   setup_gee.py         GEE connectivity verifier
   run_real.py          one-shot end-to-end runner
@@ -85,7 +86,7 @@ wildfire/
 ### Run with synthetic data (no auth required)
 
 ```powershell
-pip install -r requirements.txt
+pip install -r wildfire/requirements.txt
 python -m wildfire.train --synthetic
 ```
 
@@ -108,6 +109,46 @@ The dashboard writes to `wildfire_output/<date>/`:
 - `ignition_<date>.parquet` — every scored cell + probability
 - `ignition_<date>.geojson` — for QGIS / web maps
 - `summary_<date>.json` — top-level metrics + spread predictions
+
+### Serve interactive per-point risk
+
+The dashboard answers "where is the risk today?" for the whole region, once a
+day. To ask "what about *here*?" for an arbitrary point and date:
+
+```powershell
+$env:GEE_PROJECT = "your-gcp-project-id"
+python -m wildfire.service --port 8000
+```
+
+```
+POST /predict   {"lat": 39.8, "lon": -121.6, "target_date": "2025-09-15"}
+GET  /model     metrics, threshold and feature importances, from the artifact
+GET  /health
+```
+
+It scores a 32x32 grid of 2 km cells -- the cell size the model was trained on,
+because a 200 m KBDI cell is not a 2 km KBDI cell -- through the same
+`_stack_for_window` extraction and `score_dataframe` scoring the dashboard uses,
+so there is no second copy of the feature pipeline to drift out of step.
+
+Three things it deliberately will not do, because an earlier prototype did all
+three:
+
+- **It returns the model's calibrated probabilities, unscaled.** Min-max
+  normalising each response makes a uniformly safe patch render identically to a
+  dangerous one, and pins any "max risk" readout at exactly 100%.
+- **Every quality number is read from `wildfire_models/feature_meta.json`** --
+  test ROC-AUC, average precision, the validation-tuned threshold and its
+  provenance. There is no metric literal in the module, and a metric the
+  artifact does not carry is omitted rather than defaulted to something
+  plausible.
+- **No data is a 503, not a fallback.** If ERA5-Land latency leaves every window
+  in the preceding 8 days empty, or the trained artifact is missing, it says so
+  and names the fix. It never substitutes synthetic features into a risk map.
+
+There is no uncertainty or saliency field. A boosted tree has no dropout to
+sample, so an uncertainty band here would have been invented; the real
+gain-based feature importance (KBDI 0.66, wind speed 0.29) is served instead.
 
 ## Engineering decisions worth calling out
 
