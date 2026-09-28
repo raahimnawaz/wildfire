@@ -39,24 +39,31 @@ def _hash(parts: dict) -> str:
 
 
 def key_window(day_start: str, day_end: str, scale_m: int, pages: int,
-               pixels_per_page: int) -> str:
+               pixels_per_page: int, version: int = 1, labelled: bool = True) -> str:
+    """`version` is the extraction schema; bumping it orphans every window
+    cached under the old meaning. `labelled=False` windows (serving pulls,
+    whose label week is still in the future) never share a key with training
+    windows, so a half-observed label can't leak into a training run."""
     h = _hash({
         "kind": "window",
         "day_start": day_start, "day_end": day_end,
         "scale_m": scale_m, "pages": pages, "pixels_per_page": pixels_per_page,
+        "version": version, "labelled": labelled,
     })
-    return f"window_{day_start}_{day_end}_{scale_m}m_{pages}p_{h}"
+    tag = f"v{version}" + ("" if labelled else "u")
+    return f"window_{day_start}_{day_end}_{scale_m}m_{pages}p_{tag}_{h}"
 
 
 def key_patch(lon: float, lat: float, day_start: str, day_end: str,
-              size_px: int, pixel_km: float) -> str:
+              size_px: int, pixel_km: float, version: int = 1) -> str:
     h = _hash({
         "kind": "patch",
         "lon": round(lon, 4), "lat": round(lat, 4),
         "day_start": day_start, "day_end": day_end,
         "size_px": size_px, "pixel_km": pixel_km,
+        "version": version,
     })
-    return f"patch_{lon:.4f}_{lat:.4f}_{day_start}_{int(pixel_km*1000)}m_{h}"
+    return f"patch_{lon:.4f}_{lat:.4f}_{day_start}_{int(pixel_km*1000)}m_v{version}_{h}"
 
 
 def get_or_compute_parquet(

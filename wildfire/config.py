@@ -9,7 +9,9 @@ Wildfire Prediction"), adapted where real-data iteration disagreed with it:
   - The operational decision threshold is tuned on the validation year during
     training and stored in model metadata; decision_threshold below is only a
     last-resort fallback for legacy metadata
-  - Feature list spanning ERA5-Land, SRTM, SMAP, KBDI, MODIS NDVI
+  - Feature list spanning ERA5-Land, SRTM, SMAP L4, GRIDMET ERC, MODIS NDVI
+  - The label is a FORECAST: a new FIRMS detection in the week after the
+    feature window, in a cell with no detection in the two weeks before it
 """
 
 from dataclasses import dataclass, field
@@ -56,9 +58,9 @@ class WildfireConfig:
             "vpd_kpa",         # vapor pressure deficit (paper-aligned drought driver)
             "wind_speed_ms",   # sqrt(u^2 + v^2) at 10 m
             "wind_dir_deg",    # atan2(u, v) bearing
-            "soil_moist_surf", # SMAP 0-10 cm volumetric, m^3/m^3
+            "soil_moist_surf", # SMAP L4 0-5 cm volumetric, m^3/m^3
             "soil_moist_root", # ERA5 root-zone (28-100 cm)
-            "kbdi_index",      # Keetch-Byram Drought Index, 0-800
+            "erc",             # GRIDMET Energy Release Component (NFDRS fuel dryness)
             "ndvi",            # MODIS MOD13Q1 16-day NDVI, -1..1
             "elevation_m",     # SRTM
             "slope_deg",       # derived from SRTM
@@ -69,12 +71,27 @@ class WildfireConfig:
     )
     target_column: str = "fire_occurred"
 
+    # Forecast label. fire_occurred = 1 when FIRMS detects fire in the
+    # `label_horizon_days` AFTER the feature window, in a cell with no
+    # detection in the `label_quiet_days` before the window ends. Cells that
+    # were already burning are dropped from training: "will it ignite" has no
+    # meaning for them.
+    label_horizon_days: int = 7
+    label_quiet_days: int = 14
+
+    # A band whose source returned nothing for more than this share of a
+    # window's cells is an outage, not data -- extraction raises instead of
+    # handing the model a constant.
+    max_fill_fraction: float = 0.2
+
     # Class-imbalance handling (research doc's domain-guided injection)
     minority_oversample_factor: int = 30   # duplicate fire rows N times before perturbation
     majority_downsample_ratio: int = 10    # final neg:pos ratio cap
     extreme_temp_bump_c: float = 10.0
     extreme_wind_bump_ms: float = 8.0
-    extreme_kbdi_floor: float = 750.0
+    # ERC has no fixed ceiling (it depends on fuel model and region), so the
+    # "extreme" floor is the training set's own upper quantile.
+    extreme_erc_quantile: float = 0.95
     extreme_rh_ceiling_pct: float = 15.0
 
     # XGBoost hyperparameters — research doc's reference baseline

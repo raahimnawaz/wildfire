@@ -33,6 +33,7 @@ import torch
 from torch.utils.data import Dataset, IterableDataset
 
 from .config import SPREAD_CFG
+from .ndws import NDWS_FEATURE_MAP, NDWS_TFRECORD_FEATURES, ndws_channels  # noqa: F401 (re-exported)
 
 
 # ---------------------------------------------------------------------------
@@ -95,20 +96,25 @@ class SyntheticSpreadDataset(Dataset):
         temp = float(rng.uniform(15.0, 40.0))
         dewp = temp - float(rng.uniform(5.0, 25.0))
 
+        # Expressed in the NDWS channel semantics (see ndws.py) so synthetic
+        # and real batches share one schema: wind as speed and speed*cos(from-
+        # direction) (= -v), drought as a PDSI-like index, NDVI in x1e4 units.
+        speed = float(np.hypot(wind_u, wind_v))
+        pdsi = -(kbdi - 400.0) / 60.0
         per_step = []
         for t in range(T):
             channels_dict = {
-                "elevation_m":     elevation,
+                "elevation":       elevation,
                 "slope_deg":       slope,
                 "aspect_deg":      aspect,
-                "ndvi":            ndvi,
-                "temp_c":          np.full((H, W), temp + 0.5 * t),
-                "dewpoint_c":      np.full((H, W), dewp),
-                "wind_u_ms":       np.full((H, W), wind_u),
-                "wind_v_ms":       np.full((H, W), wind_v),
-                "kbdi_index":      kbdi,
-                "soil_moist":      soil_m,
-                "prev_fire_mask":  prev_masks[t],
+                "NDVI":            ndvi * 10000.0,
+                "tmmx_c":          np.full((H, W), temp + 0.5 * t),
+                "tmmn_c":          np.full((H, W), dewp),
+                "vs":              np.full((H, W), speed),
+                "vs_cos_th":       np.full((H, W), -wind_v),
+                "pdsi":            pdsi,
+                "sph":             np.full((H, W), 0.002 + 0.01 * (1.0 - soil_m.mean())),
+                "PrevFireMask":    prev_masks[t],
             }
             stack = np.stack([channels_dict[name] for name in self.channels], axis=0)
             per_step.append(stack)
@@ -242,28 +248,6 @@ class NDWSNumpyDataset(Dataset):
 # ---------------------------------------------------------------------------
 # Original Google TFRecord loader — minimal dependency-free parser
 # ---------------------------------------------------------------------------
-
-# NDWS feature schema in the original Google Research TFRecords.
-# Source: github.com/google-research/google-research/tree/master/simulation_research/next_day_wildfire_spread
-NDWS_TFRECORD_FEATURES: Tuple[str, ...] = (
-    "elevation", "th", "vs", "tmmn", "tmmx", "sph", "pr",
-    "pdsi", "NDVI", "population", "erc", "PrevFireMask", "FireMask",
-)
-# Map TFRecord feature name -> SPREAD_CFG.feature_channels name
-NDWS_FEATURE_MAP = {
-    "elevation":    "elevation_m",
-    "tmmx":         "temp_c",          # max temp K (paper) — converted in loader
-    "tmmn":         "dewpoint_c",      # min temp as proxy (NDWS lacks true dewpoint)
-    "vs":           "wind_u_ms",       # wind speed; we put it on u, set v=0
-    "th":           "wind_v_ms",       # wind direction degrees -> we handle below
-    "sph":          "soil_moist",      # specific humidity proxy
-    "pdsi":         "kbdi_index",      # PDSI as drought proxy (different scale, normalized)
-    "NDVI":         "ndvi",
-    "PrevFireMask": "prev_fire_mask",
-    # erc, pr, population: dropped (paper-optional)
-    # slope_deg, aspect_deg: derived from elevation if needed
-}
-
 
 def _read_tfrecord_messages(path: Path) -> Iterator[bytes]:
     """Yield raw protobuf-encoded record bytes from a TFRecord file."""
@@ -411,12 +395,7 @@ class NDWSTFRecordDataset(IterableDataset):
 
     def _to_xy(self, parsed: dict) -> Tuple[np.ndarray, np.ndarray]:
         s = self.patch_size
-        # Build channel stack in SPREAD_CFG.feature_channels order
-        out_channels = []
-        for ch in self.channels:
-            value = self._lookup_channel(ch, parsed, s)
-            out_channels.append(value)
-        x_2d = np.stack(out_channels, axis=0)            # (C, H, W)
+        x_2d = ndws_channels(parsed, s)                  # (C, H, W)
         x = np.broadcast_to(x_2d[None], (self.lookback, *x_2d.shape)).copy()  # (T, C, H, W)
 
         fire = parsed.get("FireMask")
@@ -424,25 +403,6 @@ class NDWSTFRecordDataset(IterableDataset):
             raise KeyError("TFRecord example missing FireMask")
         y = (fire.reshape(s, s) > 0.5).astype(np.float32)[None]
         return x.astype(np.float32), y
-
-    def _lookup_channel(self, name: str, parsed: dict, s: int) -> np.ndarray:
-        # Reverse-map from our channel name to NDWS feature name
-        for tf_name, our_name in NDWS_FEATURE_MAP.items():
-            if our_name == name and tf_name in parsed:
-                arr = parsed[tf_name].reshape(s, s).astype(np.float32)
-                if tf_name == "tmmx":          # K -> C
-                    arr = arr - 273.15
-                if tf_name == "tmmn":
-                    arr = arr - 273.15
-                if tf_name == "vs":            # m/s already; project on u-axis
-                    return arr
-                if tf_name == "th":
-                    # th is wind direction in degrees -> convert to v-component
-                    speed = parsed.get("vs", np.zeros_like(arr)).reshape(s, s)
-                    return speed * np.cos(np.deg2rad(arr))
-                return arr
-        # Channel not supplied by NDWS — return zeros (slope/aspect unless derived)
-        return np.zeros((s, s), dtype=np.float32)
 
     def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
         for shard in self.shards:

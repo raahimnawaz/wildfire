@@ -3,6 +3,21 @@
 How I built an operational two-stage wildfire prediction pipeline for the US
 West Coast, what went wrong along the way, and how I fixed it. ~1,000 words.
 
+> **Update (Sept 2026) — the ignition results below are withdrawn.** An audit
+> found three problems with the model behind them. (1) Features and label came
+> from the same week, so it detected fires rather than forecasting them.
+> (2) The UTOKYO KBDI collection only covers 60°E–180°E, so every real row
+> carried the fallback KBDI of 300. The "KBDI dominates" importance came from
+> the augmentation, which was the only thing that ever varied KBDI.
+> (3) Probabilities ran 9–17× above observed rates because of the
+> rebalancing. All three are fixed in code: next-week new-fire labels, GRIDMET
+> ERC in place of KBDI, SMAP v008, fill-flag outage checks, and Platt
+> calibration on the validation year. New numbers will replace the XGBoost
+> rows once the model is re-extracted and retrained. The spread model's
+> serving inputs were also rebuilt to match its NDWS training channels. The
+> engineering lessons below still stand, and the sentinel-mask trick in #1 is
+> exactly what hid the dead KBDI source.
+
 ---
 
 ## The problem

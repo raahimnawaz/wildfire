@@ -180,6 +180,10 @@ def train(args) -> dict:
                 "arch": args.arch,
                 "in_channels": in_channels,
                 "lookback_days": SPREAD_CFG.lookback_days,
+                # Serving checks both: a synthetic-trained model is never run
+                # on real imagery, and channels must match by name, not count.
+                "feature_channels": list(SPREAD_CFG.feature_channels),
+                "source": args.source,
             }, SPREAD_CFG.model_path())
 
     # Load best, evaluate on test

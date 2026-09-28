@@ -24,9 +24,12 @@ do not come back:
 2. **It min-max normalised each prediction to [0, 1]** before returning it. That
    makes every response look the same: the hottest cell in a uniformly safe
    patch renders identically to the hottest cell in a patch that is about to
-   burn, and a "max risk" readout is then always exactly 100%. XGBoost already
-   emits a calibrated probability, so this returns it untouched. The only number
-   that makes a cell "an alert" is the validation-tuned threshold below.
+   burn, and a "max risk" readout is then always exactly 100%. This returns the
+   model's probability as the artifact defines it: Platt-calibrated on the
+   validation year when the artifact carries a calibration (the booster's raw
+   output is not a probability -- the training rebalancing inflates it roughly
+   10x), with ``probability_calibrated`` saying which. The only number that
+   makes a cell "an alert" is the validation-tuned threshold below.
 
 3. **If the weights file was missing it created a dummy random-weights model,
    saved it, and served predictions from it**, printing "Successfully loaded
@@ -45,8 +48,11 @@ The prototype served MC-dropout variance and a gradient saliency map. Both came
 from a ConvLSTM that has no evaluation recorded anywhere in this repo. Dropping
 them is not a downgrade: a boosted tree has no dropout to sample, so any
 "uncertainty" here would have been invented. What replaces saliency is the
-model's real gain-based feature importance, which is measured and which the
-README already quotes (KBDI and wind dominate).
+model's real gain-based feature importance, read from the artifact.
+
+Cells without complete data -- ocean, the edge padding of the sampled grid, or
+a source that returned nothing there -- come back as ``null``, not scored:
+the model never trained on those values.
 """
 
 # NOTE: deliberately no `from __future__ import annotations` here. It turns
@@ -65,11 +71,18 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
-from .predict import resolve_threshold, score_dataframe
+from .data_extraction import FILLABLE_BANDS, FeatureOutage, check_coverage
+from .predict import (
+    IncompatibleArtifact,
+    check_artifact,
+    probability_is_calibrated,
+    resolve_threshold,
+    score_dataframe,
+)
 
 #: Sampling resolution. Matches ``CFG.cell_scale_m`` on purpose — the model was
 #: trained on 2 km cells, and scoring it on a finer grid would feed it feature
-#: statistics it never saw (a 200 m KBDI cell is not a 2 km KBDI cell).
+#: statistics it never saw (a 200 m soil-moisture cell is not a 2 km one).
 DEFAULT_PIXEL_KM = CFG.cell_scale_m / 1000.0
 
 #: Grid edge in cells. 32 x 32 at 2 km is a ~64 km box, which is a sensible
@@ -95,13 +108,13 @@ REQUIRED_BANDS = (
     "slope_deg",
     "aspect_deg",
     "ssm",
-    "kbdi_index",
+    "erc",
     "ndvi",
-)
+) + tuple(f"{band}_filled" for band in FILLABLE_BANDS)
 
 
 class ModelUnavailable(RuntimeError):
-    """The trained artifact is missing. Actionable, not a 500."""
+    """The trained artifact is missing or unusable. Actionable, not a 500."""
 
 
 class DataUnavailable(RuntimeError):
@@ -116,7 +129,12 @@ def _meta() -> dict:
             f"No feature metadata at {path}. Train a model first: "
             "python -m wildfire.train --synthetic"
         )
-    return json.loads(path.read_text())
+    meta = json.loads(path.read_text())
+    try:
+        check_artifact(meta)
+    except IncompatibleArtifact as exc:
+        raise ModelUnavailable(str(exc)) from exc
+    return meta
 
 
 def model_card() -> dict:
@@ -135,6 +153,8 @@ def model_card() -> dict:
         "threshold": resolve_threshold(meta),
         "threshold_strategy": meta.get("threshold_strategy"),
         "threshold_tuned_on": meta.get("threshold_tuned_on"),
+        "probability_calibrated": probability_is_calibrated(meta),
+        "label": meta.get("label"),
         "trained_on": meta.get("trained_on"),
         "evaluation": {
             "train_years": data.get("train_years"),
@@ -186,7 +206,8 @@ def _gee_sampler(lon: float, lat: float, day_start: str, day_end: str,
     dlon = half_km / (111.0 * max(np.cos(np.radians(lat)), 0.1))
     bbox = ee.Geometry.Rectangle([lon - dlon, lat - dlat, lon + dlon, lat + dlat])
 
-    stack, _ = _stack_for_window(ee, day_start, day_end, geom=bbox)
+    # labelled=False: the forecast week is in the future, so there is no label.
+    stack, _ = _stack_for_window(ee, day_start, day_end, geom=bbox, labelled=False)
     scale_m = int(pixel_km * 1000)
     rect = stack.reproject(crs="EPSG:4326", scale=scale_m).sampleRectangle(
         region=bbox, defaultValue=0
@@ -215,13 +236,27 @@ def _frame_from_bands(bands: dict[str, np.ndarray], date: str, grid: int) -> pd.
             "Either the window is empty or a band was renamed upstream."
         )
     frame = pd.DataFrame({band: bands[band].reshape(-1) for band in bands})
-    # derive_all reads `date` for month / day_of_year.
+    # derive_all reads `date` for month / day_of_year. Training stamps each
+    # row with its window's midpoint, so this must too.
     frame["date"] = date
     if len(frame) != grid * grid:
         raise DataUnavailable(
             f"Expected {grid * grid} cells, sampled {len(frame)}."
         )
     return frame
+
+
+def _valid_cells(frame: pd.DataFrame) -> np.ndarray:
+    """Cells with real data for every feature.
+
+    sampleRectangle writes 0 into masked pixels and the grid is zero-padded,
+    so a 2 m temperature of exactly 0 K marks ocean (ERA5-Land is land-only)
+    or padding. Gap-filled bands carry their own flags.
+    """
+    valid = frame["temperature_2m"].to_numpy() > 0
+    for band in FILLABLE_BANDS:
+        valid &= frame[f"{band}_filled"].to_numpy() == 0
+    return valid
 
 
 def risk_grid(lat: float, lon: float,
@@ -245,24 +280,41 @@ def risk_grid(lat: float, lon: float,
         target_date or datetime.now(timezone.utc).date().isoformat(), "%Y-%m-%d"
     ).date()
 
+    meta = _meta()
     last_error: Optional[Exception] = None
     for shift in WINDOW_SHIFTS:
         end = target - timedelta(days=shift)
         start = end - timedelta(days=7)
         day_start, day_end = start.isoformat(), end.isoformat()
+        midpoint = (start + (end - start) / 2).isoformat()
         try:
             bands = sampler(lon, lat, day_start, day_end, grid, pixel_km)
-            frame = _frame_from_bands(bands, day_end, grid)
-        except DataUnavailable as exc:
+            frame = _frame_from_bands(bands, midpoint, grid)
+            land = frame[frame["temperature_2m"].to_numpy() > 0]
+            if land.empty:
+                raise DataUnavailable("No land cells with ERA5-Land data in this box.")
+            check_coverage(land, f"window {day_start}..{day_end}")
+        except (DataUnavailable, FeatureOutage) as exc:
             last_error = exc
             continue
         except Exception as exc:  # GEE raises on fully-empty ERA5 windows
             last_error = exc
             continue
 
-        scored = score_dataframe(frame)
-        threshold = resolve_threshold(_meta())
-        proba = scored["fire_probability"].to_numpy(dtype=np.float32)
+        valid = _valid_cells(frame)
+        try:
+            scored = score_dataframe(frame[valid])
+        except IncompatibleArtifact as exc:
+            raise ModelUnavailable(str(exc)) from exc
+        threshold = resolve_threshold(meta)
+        proba = np.full(len(frame), np.nan)
+        proba[valid] = scored["fire_probability"].to_numpy(dtype=np.float64)
+        alert = np.where(valid, proba, -np.inf) >= threshold
+
+        def as_grid(values, cast=float) -> list:
+            # Invalid cells are null: they were never scored for real.
+            out = np.where(valid, values, np.nan).reshape(grid, grid)
+            return [[None if np.isnan(v) else cast(v) for v in row] for row in out.tolist()]
 
         half_km = (grid * pixel_km) / 2.0
         dlat = half_km / 111.0
@@ -280,14 +332,15 @@ def risk_grid(lat: float, lon: float,
             "window": {"start": day_start, "end": day_end,
                        "days_behind_target": shift},
             "data_source": "live_gee",
-            # Calibrated probabilities, returned exactly as the model emits
-            # them. Not rescaled -- see the module docstring.
-            "fire_probability": proba.reshape(grid, grid).tolist(),
-            "fire_alert": (proba >= threshold).astype(np.int8)
-                          .reshape(grid, grid).tolist(),
-            "max_probability": float(proba.max()),
-            "mean_probability": float(proba.mean()),
-            "alert_cells": int((proba >= threshold).sum()),
+            # The artifact's probability, never rescaled per request -- see
+            # the module docstring. Calibrated iff the artifact says so.
+            "probability_calibrated": probability_is_calibrated(meta),
+            "fire_probability": as_grid(proba),
+            "fire_alert": as_grid(alert, cast=int),
+            "valid_cells": int(valid.sum()),
+            "max_probability": float(proba[valid].max()) if valid.any() else None,
+            "mean_probability": float(proba[valid].mean()) if valid.any() else None,
+            "alert_cells": int((alert & valid).sum()),
             "model": model_card(),
         }
 

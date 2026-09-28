@@ -97,13 +97,27 @@ class ZoomAwareLayer(MacroElement):
 RISK_COLORS = ["#0a4a6e", "#00d4ff", "#ffd60a", "#ff6b00", "#ff1744"]
 
 
-def _make_colormap(vmin: float = 0.0, vmax: float = 1.0) -> LinearColormap:
+def _make_colormap(vmin: float = 0.0, vmax: float = 1.0,
+                   caption: str = "Probability of a new fire start (next 7 days)") -> LinearColormap:
     cm = LinearColormap(RISK_COLORS, vmin=vmin, vmax=vmax)
-    cm.caption = "Ignition probability (next 7 days)"
+    cm.caption = caption
     return cm
 
 
-def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
+def _color_scale_max(probs: pd.Series, threshold: float) -> float:
+    """Top of the colour ramp. Calibrated weekly probabilities sit around
+    0.1-1%, so a fixed 0-1 ramp would paint every cell the bottom colour; the
+    ramp spans the observed range instead, and always reaches past the alert
+    threshold so alert cells never share the lowest colours."""
+    return float(min(1.0, max(probs.quantile(0.999), 2.0 * threshold, 1e-4)))
+
+
+def _format_p(p: float, calibrated: bool) -> str:
+    return f"{p:.2%}" if calibrated else f"{p:.3f}"
+
+
+def _build_map(scored: pd.DataFrame, cm: LinearColormap, focal_cutoff: float,
+               vmax: float, calibrated: bool) -> folium.Map:
     # Center on the geographic centroid of sampled cells
     center = [float(scored["latitude"].mean()), float(scored["longitude"].mean())]
 
@@ -137,7 +151,7 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
 
     # Smooth heatmap layer for the bulk of the cells — fast, satellite-feel
     heat_data = [
-        [float(r["latitude"]), float(r["longitude"]), float(r["fire_probability"])]
+        [float(r["latitude"]), float(r["longitude"]), min(1.0, float(r["fire_probability"]) / vmax)]
         for _, r in scored.iterrows()
     ]
     heat = HeatMap(
@@ -161,29 +175,30 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
     # the honest representation at that scale.
     ZoomAwareLayer(heat, HEAT_HIDE_ABOVE_ZOOM).add_to(fmap)
 
-    # Crisp circle markers ONLY for the most at-risk cells (top 1% or anything >= 0.4)
-    p_cutoff = max(0.4, float(scored["fire_probability"].quantile(0.99)))
-    focal = scored[scored["fire_probability"] >= p_cutoff].copy()
-    focal_layer = folium.FeatureGroup(name=f"High-risk cells (p ≥ {p_cutoff:.2f})", show=True)
+    # Crisp circle markers ONLY for alert cells, capped at the top 1%
+    focal = scored[scored["fire_probability"] >= focal_cutoff].copy()
+    focal_layer = folium.FeatureGroup(
+        name=f"High-risk cells (p ≥ {_format_p(focal_cutoff, calibrated)})", show=True)
 
     for _, row in focal.iterrows():
         p = float(row["fire_probability"])
-        color = cm(p)
+        color = cm(min(p, vmax))
+        rel = min(1.0, p / vmax)
         popup_html = (
             f"<div style='font-family: \"DM Mono\", monospace; font-size: 11px; color: #c8d3e0;'>"
             f"<b style='color:#fff'>Cell ({row['longitude']:.3f}, {row['latitude']:.3f})</b><br>"
-            f"<span style='color:#6c7a89'>Ignition p</span> "
-            f"<b style='color:{color}'>{p:.3f}</b><br>"
+            f"<span style='color:#6c7a89'>{'P(new fire, 7 d)' if calibrated else 'Risk score'}</span> "
+            f"<b style='color:{color}'>{_format_p(p, calibrated)}</b><br>"
             f"<span style='color:#6c7a89'>Temp</span> {row.get('temp_c', 0):.1f}°C<br>"
             f"<span style='color:#6c7a89'>Wind</span> {row.get('wind_speed_ms', 0):.1f} m/s<br>"
-            f"<span style='color:#6c7a89'>KBDI</span> {row.get('kbdi_index', 0):.0f}<br>"
+            f"<span style='color:#6c7a89'>ERC</span> {row.get('erc', 0):.0f}<br>"
             f"<span style='color:#6c7a89'>RH</span>   {row.get('rh_pct', 0):.0f}%<br>"
             f"<span style='color:#6c7a89'>NDVI</span> {row.get('ndvi', 0):.2f}"
             f"</div>"
         )
         folium.CircleMarker(
             location=[float(row["latitude"]), float(row["longitude"])],
-            radius=4 + 8 * p,
+            radius=4 + 8 * rel,
             color=color,
             fill=True,
             fill_color=color,
@@ -195,7 +210,7 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
         # Crosshair ring for visual emphasis on alerts
         folium.CircleMarker(
             location=[float(row["latitude"]), float(row["longitude"])],
-            radius=14 + 8 * p,
+            radius=14 + 8 * rel,
             color=color,
             fill=False,
             weight=1,
@@ -208,13 +223,14 @@ def _build_map(scored: pd.DataFrame, cm: LinearColormap) -> folium.Map:
     return fmap
 
 
-def _histogram_svg(probs: pd.Series, width: int = 280, height: int = 90) -> str:
-    """Tiny inline-SVG histogram of fire probabilities — no JS, ships in the page."""
+def _histogram_svg(probs: pd.Series, vmax: float = 1.0, calibrated: bool = False,
+                   width: int = 280, height: int = 90) -> str:
+    """Tiny inline-SVG histogram of fire probabilities over [0, vmax] — no JS,
+    ships in the page. Values above vmax land in the last bin."""
     n_bins = 20
-    bin_edges = [i / n_bins for i in range(n_bins + 1)]
     counts = [0] * n_bins
     for v in probs:
-        idx = min(int(v * n_bins), n_bins - 1)
+        idx = min(int(v / vmax * n_bins), n_bins - 1)
         counts[idx] += 1
     max_c = max(counts) or 1
     bar_w = (width - 20) / n_bins
@@ -240,9 +256,9 @@ def _histogram_svg(probs: pd.Series, width: int = 280, height: int = 90) -> str:
         f'<line x1="10" y1="{height - 10}" x2="{width - 10}" y2="{height - 10}" '
         f'stroke="#3a4654" stroke-width="0.5"/>'
         f'<text x="10" y="{height - 1}" fill="#6c7a89" font-size="8" '
-        f'font-family="DM Mono, monospace">0.0</text>'
-        f'<text x="{width - 25}" y="{height - 1}" fill="#6c7a89" font-size="8" '
-        f'font-family="DM Mono, monospace">1.0</text>'
+        f'font-family="DM Mono, monospace">0</text>'
+        f'<text x="{width - 40}" y="{height - 1}" fill="#6c7a89" font-size="8" '
+        f'font-family="DM Mono, monospace">{_format_p(vmax, calibrated)}+</text>'
     )
     return (
         f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
@@ -285,14 +301,18 @@ def _feature_importance_bars(meta: dict, top_n: int = 8) -> str:
 
 
 def _hud_shell(map_html: str, scored: pd.DataFrame, meta: dict,
-               target_date: str, summary: dict) -> str:
+               target_date: str, summary: dict, vmax: float = 1.0) -> str:
     """Wrap the folium map in a HUD-style HTML shell."""
     n_total      = int(summary["n_cells_scored"])
     n_alerts     = int(summary["n_high_risk_cells"])
     peak_p       = float(summary["max_ignition_probability"])
     mean_p       = float(summary["mean_ignition_probability"])
-    from .predict import resolve_threshold
+    from .predict import probability_is_calibrated, resolve_threshold
     threshold    = resolve_threshold(meta)  # the value fire_alert actually uses
+    calibrated   = probability_is_calibrated(meta)
+    fmt          = lambda p: _format_p(p, calibrated)  # noqa: E731
+    p_label      = "P(new fire, 7 d)" if calibrated else "Risk score (uncal.)"
+    label_def    = (meta.get("label") or {}).get("definition") or "FIRMS detection in the scored window"
     metrics      = (meta.get("metrics") or {})
     test_metrics = metrics.get("test") or metrics  # new nested layout, legacy flat fallback
     auc          = test_metrics.get("roc_auc", float("nan"))
@@ -309,15 +329,15 @@ def _hud_shell(map_html: str, scored: pd.DataFrame, meta: dict,
     top_rows = "".join(
         f"<tr class='clickable' data-lat='{r['latitude']:.4f}' data-lon='{r['longitude']:.4f}'>"
         f"<td>{r['longitude']:.3f}</td><td>{r['latitude']:.3f}</td>"
-        f"<td class='p' style='color:{_band(r['fire_probability'])}'>"
-        f"{r['fire_probability']:.3f}</td>"
+        f"<td class='p' style='color:{_band(r['fire_probability'] / vmax)}'>"
+        f"{fmt(r['fire_probability'])}</td>"
         f"<td>{r.get('temp_c', 0):.1f}</td>"
         f"<td>{r.get('wind_speed_ms', 0):.1f}</td>"
-        f"<td>{r.get('kbdi_index', 0):.0f}</td></tr>"
+        f"<td>{r.get('erc', 0):.0f}</td></tr>"
         for _, r in top10.iterrows()
     )
 
-    hist_svg = _histogram_svg(scored["fire_probability"])
+    hist_svg = _histogram_svg(scored["fire_probability"], vmax, calibrated)
     fi_svg = _feature_importance_bars(meta)
     gen_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -412,7 +432,7 @@ tr.clickable:active td {{ background: #00d4ff22; }}
       <div><span class="k">TGT</span> <span class="v">{target_date}</span></div>
       <div><span class="k">CELLS</span> <span class="v">{n_total:,}</span></div>
       <div><span class="k">ALERTS</span> <span class="{'alert' if n_alerts > 0 else 'v'}">{n_alerts}</span></div>
-      <div><span class="k">PEAK</span> <span class="alert">{peak_p:.3f}</span></div>
+      <div><span class="k">PEAK</span> <span class="alert">{fmt(peak_p)}</span></div>
     </div>
   </div>
 
@@ -431,9 +451,9 @@ tr.clickable:active td {{ background: #00d4ff22; }}
     <div class="kpi-grid">
       <div class="kpi"><div class="l">Cells scored</div><div class="v">{n_total:,}</div></div>
       <div class="kpi {'alert' if n_alerts > 0 else 'ok'}"><div class="l">High-risk alerts</div><div class="v">{n_alerts}</div></div>
-      <div class="kpi crit"><div class="l">Peak ignition p</div><div class="v">{peak_p:.3f}</div></div>
-      <div class="kpi"><div class="l">Mean ignition p</div><div class="v">{mean_p:.4f}</div></div>
-      <div class="kpi ok"><div class="l">Threshold</div><div class="v">{threshold:.3f}</div></div>
+      <div class="kpi crit"><div class="l">Peak {p_label}</div><div class="v">{fmt(peak_p)}</div></div>
+      <div class="kpi"><div class="l">Mean {p_label}</div><div class="v">{fmt(mean_p)}</div></div>
+      <div class="kpi ok"><div class="l">Threshold</div><div class="v">{fmt(threshold)}</div></div>
       <div class="kpi"><div class="l">Model AUC</div><div class="v">{auc:.3f}</div></div>
     </div>
 
@@ -443,7 +463,7 @@ tr.clickable:active td {{ background: #00d4ff22; }}
     <h2>Top 10 at-risk cells</h2>
     <div class="hint">click any row to fly the map to that cell</div>
     <table id="top10">
-      <thead><tr><th>Lon</th><th>Lat</th><th>p</th><th>°C</th><th>m/s</th><th>KBDI</th></tr></thead>
+      <thead><tr><th>Lon</th><th>Lat</th><th>p</th><th>°C</th><th>m/s</th><th>ERC</th></tr></thead>
       <tbody>{top_rows}</tbody>
     </table>
 
@@ -453,8 +473,9 @@ tr.clickable:active td {{ background: #00d4ff22; }}
     <div class="meta">
       <b>MODEL</b> XGBoost binary classifier, 500 trees, depth 6 · production fit {prod_label}<br>
       <b>EVAL</b> train {train_year} · threshold tuned on validation · tested out-of-time {test_year}<br>
-      <b>FEATURES</b> ERA5-Land · SRTM · NASA SMAP · KBDI · MODIS NDVI<br>
-      <b>LABELS</b> NASA FIRMS MODIS T21 thermal anomalies<br>
+      <b>FEATURES</b> ERA5-Land · SRTM · SMAP L4 · GRIDMET ERC · MODIS NDVI<br>
+      <b>LABELS</b> NASA FIRMS: {label_def}<br>
+      <b>PROBABILITY</b> {"Platt-calibrated on the validation year" if calibrated else "raw booster score — not a probability"}<br>
       <b>METRICS</b> ROC-AUC {auc:.3f} · AUC-PR {ap:.4f}<br>
       <b>FRAME</b> EPSG:4326 · ~{CFG.cell_scale_m / 1000:g} km cells · 7-day window
     </div>
@@ -491,11 +512,17 @@ def _band(p: float) -> str:
 
 def render(scored: pd.DataFrame, meta: dict, target_date: str, summary: dict,
            out_html: Path) -> None:
-    cm = _make_colormap()
-    fmap = _build_map(scored, cm)
+    from .predict import probability_is_calibrated, resolve_threshold
+    calibrated = probability_is_calibrated(meta)
+    threshold = resolve_threshold(meta)
+    vmax = _color_scale_max(scored["fire_probability"], threshold)
+    focal_cutoff = max(threshold, float(scored["fire_probability"].quantile(0.99)))
+    cm = _make_colormap(0.0, vmax, "Probability of a new fire start (next 7 days)"
+                        if calibrated else "Relative ignition risk (uncalibrated score)")
+    fmap = _build_map(scored, cm, focal_cutoff, vmax, calibrated)
     map_html = fmap.get_root().render()
     page = _hud_shell(map_html=_to_iframe(map_html), scored=scored, meta=meta,
-                      target_date=target_date, summary=summary)
+                      target_date=target_date, summary=summary, vmax=vmax)
     out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text(page, encoding="utf-8")
     print(f"[heatmap] wrote {out_html}  ({out_html.stat().st_size / 1024:.0f} KB)")

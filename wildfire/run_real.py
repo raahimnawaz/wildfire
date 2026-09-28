@@ -121,10 +121,10 @@ def _convert_ndws_to_numpy() -> None:
             "The Kaggle dataset layout may have changed — inspect manually."
         )
 
-    from .spread.data import _read_tfrecord_messages, _parse_example_floats, NDWS_FEATURE_MAP
+    from .spread.data import _read_tfrecord_messages, _parse_example_floats
+    from .spread.ndws import ndws_channels
 
     s = SPREAD_CFG.patch_size
-    channels = SPREAD_CFG.feature_channels
     xs: list[np.ndarray] = []
     ys: list[np.ndarray] = []
     print(f"[ndws] converting {len(shards)} shards to numpy ...")
@@ -137,23 +137,7 @@ def _convert_ndws_to_numpy() -> None:
                 fire = parsed["FireMask"].reshape(s, s)
             except ValueError:
                 continue
-            channel_stack = []
-            for ch in channels:
-                arr = np.zeros((s, s), dtype=np.float32)
-                for tf_name, our_name in NDWS_FEATURE_MAP.items():
-                    if our_name == ch and tf_name in parsed:
-                        try:
-                            arr = parsed[tf_name].reshape(s, s).astype(np.float32)
-                        except ValueError:
-                            continue
-                        if tf_name in ("tmmx", "tmmn"):
-                            arr = arr - 273.15
-                        if tf_name == "th":
-                            speed = parsed.get("vs", np.zeros_like(arr)).reshape(s, s)
-                            arr = speed * np.cos(np.deg2rad(arr))
-                        break
-                channel_stack.append(arr)
-            x = np.stack(channel_stack, axis=0).astype(np.float32)   # (C, H, W)
+            x = ndws_channels(parsed, s)                              # (C, H, W)
             y = (fire > 0.5).astype(np.float32)[None]                # (1, H, W)
             xs.append(x)
             ys.append(y)
@@ -186,7 +170,10 @@ def _train_spread() -> None:
 # ---------------------------------------------------------------------------
 
 def _gee_extract_year(year: int, months: tuple | None = None, suffix: str = "") -> Path:
-    out = CFG.data_dir / f"raw_{year}{suffix}.parquet"
+    from .data_extraction import EXTRACTION_VERSION
+    # Versioned name: a table from an older schema (e.g. v1's same-week label
+    # and dead KBDI column) is never mistaken for a finished extraction.
+    out = CFG.data_dir / f"raw_{year}{suffix}_v{EXTRACTION_VERSION}.parquet"
     if out.exists() and out.stat().st_size > 1000:
         print(f"[gee] {out} already exists — skip extraction")
         return out

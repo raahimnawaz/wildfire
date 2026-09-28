@@ -18,7 +18,8 @@ from typing import List
 import numpy as np
 
 from .config import SPREAD_CFG
-from .data import _read_tfrecord_messages, _parse_example_floats, NDWS_FEATURE_MAP
+from .data import _read_tfrecord_messages, _parse_example_floats
+from .ndws import ndws_channels
 
 
 def _shard_split(name: str) -> str:
@@ -28,7 +29,6 @@ def _shard_split(name: str) -> str:
 
 def _convert_shards(shards: List[Path]) -> tuple[np.ndarray, np.ndarray]:
     s = SPREAD_CFG.patch_size
-    channels = SPREAD_CFG.feature_channels
     xs, ys = [], []
     for shard in shards:
         for record in _read_tfrecord_messages(shard):
@@ -39,23 +39,7 @@ def _convert_shards(shards: List[Path]) -> tuple[np.ndarray, np.ndarray]:
                 fire = parsed["FireMask"].reshape(s, s)
             except ValueError:
                 continue
-            stack = []
-            for ch in channels:
-                arr = np.zeros((s, s), dtype=np.float32)
-                for tf_name, our_name in NDWS_FEATURE_MAP.items():
-                    if our_name == ch and tf_name in parsed:
-                        try:
-                            arr = parsed[tf_name].reshape(s, s).astype(np.float32)
-                        except ValueError:
-                            continue
-                        if tf_name in ("tmmx", "tmmn"):
-                            arr = arr - 273.15
-                        if tf_name == "th":
-                            speed = parsed.get("vs", np.zeros_like(arr)).reshape(s, s)
-                            arr = speed * np.cos(np.deg2rad(arr))
-                        break
-                stack.append(arr)
-            xs.append(np.stack(stack, axis=0).astype(np.float32))   # (C, H, W)
+            xs.append(ndws_channels(parsed, s))                      # (C, H, W)
             # FireMask: paper uses {-1, 0, 1}; treat anything > 0 as fire
             ys.append((fire > 0.5).astype(np.float32)[None])         # (1, H, W)
     return np.stack(xs), np.stack(ys)

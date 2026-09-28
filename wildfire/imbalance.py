@@ -21,7 +21,9 @@ import pandas as pd
 from .config import CFG
 
 
-def _perturb_minority(minority: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
+def _perturb_minority(minority: pd.DataFrame, rng: np.random.Generator,
+                      erc_floor: float | None = None,
+                      erc_max: float | None = None) -> pd.DataFrame:
     """Push duplicated fire rows toward extreme fire-weather regimes."""
     out = minority.copy()
     noise = lambda scale, n: rng.normal(0.0, scale, size=n)
@@ -33,10 +35,12 @@ def _perturb_minority(minority: pd.DataFrame, rng: np.random.Generator) -> pd.Da
         out["wind_speed_ms"] = np.maximum(
             0.0, out["wind_speed_ms"] + CFG.extreme_wind_bump_ms + noise(1.0, n)
         )
-    if "kbdi_index" in out:
-        out["kbdi_index"] = np.clip(
-            np.maximum(out["kbdi_index"], CFG.extreme_kbdi_floor) + noise(15.0, n),
-            0.0, 800.0,
+    if "erc" in out and erc_floor is not None:
+        # Floor at the training set's own upper quantile and cap at its max, so
+        # augmented rows stay inside the ERC range real cells actually reach.
+        out["erc"] = np.clip(
+            np.maximum(out["erc"], erc_floor) + noise(2.0, n),
+            0.0, erc_max,
         )
     if "rh_pct" in out:
         # Floor at 1% (not 0): record-low fire-weather RH is a few percent,
@@ -87,9 +91,15 @@ def rebalance_training_set(
     if len(pos) == 0:
         raise ValueError("No positive (fire) samples in training set — cannot rebalance.")
 
-    # 1. Duplicate minority then perturb each duplicate independently
+    # 1. Duplicate minority then perturb each duplicate independently. The ERC
+    #    floor comes from this (training-only) frame, never from val/test.
+    erc_floor = erc_max = None
+    if "erc" in df.columns:
+        erc_floor = float(df["erc"].quantile(CFG.extreme_erc_quantile))
+        erc_max = float(df["erc"].max())
     duplicated = pd.concat(
-        [_perturb_minority(pos, rng) for _ in range(CFG.minority_oversample_factor)],
+        [_perturb_minority(pos, rng, erc_floor, erc_max)
+         for _ in range(CFG.minority_oversample_factor)],
         ignore_index=True,
     )
     augmented_pos = pd.concat([pos, duplicated], ignore_index=True)

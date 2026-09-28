@@ -18,19 +18,24 @@ class SpreadConfig:
     cell_resolution_m: int = 1000      # NDWS uses 1 km cells
     lookback_days: int = 4             # ConvLSTM input timesteps
 
-    # Channels — order is meaningful; train/predict must agree
+    # Channels — order is meaningful; train/predict must agree. Named for what
+    # they hold in Next Day Wildfire Spread, the data the model trains on.
+    # (Until schema v2 these were called temp_c/dewpoint_c/wind_u_ms/
+    # wind_v_ms/kbdi_index/soil_moist while holding tmmx/tmmn/vs/vs*cos(th)/
+    # PDSI/specific humidity, and the serving path filled them with what the
+    # names said. The order is unchanged, so older checkpoints still load.)
     feature_channels: List[str] = field(default_factory=lambda: [
-        "elevation_m",
-        "slope_deg",
-        "aspect_deg",
-        "ndvi",
-        "temp_c",
-        "dewpoint_c",
-        "wind_u_ms",
-        "wind_v_ms",
-        "kbdi_index",
-        "soil_moist",
-        "prev_fire_mask",
+        "elevation",       # SRTM, m
+        "slope_deg",       # zeros: NDWS carries no slope
+        "aspect_deg",      # zeros: NDWS carries no aspect
+        "NDVI",            # VIIRS VNP13A1, raw units (x1e4)
+        "tmmx_c",          # GRIDMET daily max temperature, °C
+        "tmmn_c",          # GRIDMET daily min temperature, °C
+        "vs",              # GRIDMET wind speed, m/s
+        "vs_cos_th",       # vs * cos(th), th = GRIDMET wind-from direction
+        "pdsi",            # GRIDMET Palmer Drought Severity Index
+        "sph",             # GRIDMET specific humidity, kg/kg
+        "PrevFireMask",    # MOD14A1 fire mask on day t: -1 unknown, 0, 1 fire
     ])
 
     # Network shape

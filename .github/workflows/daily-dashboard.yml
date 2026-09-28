@@ -54,7 +54,8 @@ jobs:
         run: |
           # Minimal deps for the ignition path (torch/U-Net spread is skipped
           # in CI via --ignition-only to keep the install light).
-          pip install --quiet earthengine-api xgboost pandas pyarrow folium numpy
+          # scikit-learn: XGBClassifier refuses to construct without it.
+          pip install --quiet earthengine-api xgboost scikit-learn pandas pyarrow folium numpy
           python -m wildfire.dashboard --date "$(date -u +%Y-%m-%d)" --ignition-only
 
       - name: Stage site/

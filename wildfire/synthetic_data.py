@@ -6,7 +6,7 @@ The point: let the full pipeline (feature engineering -> rebalancing -> training
 authentication. The class-conditional distributions are deliberately calibrated
 to match the qualitative pattern seen in real West Coast fire datasets:
 
-  * High-fire days are hot, dry, windy, drought-stressed (high KBDI, low NDVI).
+  * High-fire days are hot, dry, windy, with dry fuels (high ERC, low NDVI).
   * Non-fire days lean cooler, wetter, calmer.
   * Topography is sampled from a uniform West Coast prior.
   * Severe ~150:1 class imbalance, matching the paper.
@@ -34,7 +34,7 @@ def _sample_class(n: int, fire: bool, rng: np.random.Generator) -> pd.DataFrame:
         wind_boost = rng.normal(7.0, 2.5, n)              # Santa Ana / Diablo boost
         wind_dir_bias = rng.uniform(0, 1, n)
         u = np.where(wind_dir_bias > 0.5, u + wind_boost, u - wind_boost)
-        kbdi       = rng.normal(680.0, 70.0, n)
+        erc        = rng.normal(78.0, 10.0, n)
         ndvi       = rng.normal(0.18, 0.08, n)
         sm_surf    = rng.beta(1.2, 9.0, n) * 0.4
         sm_root    = rng.beta(1.5, 7.0, n) * 0.5
@@ -43,7 +43,7 @@ def _sample_class(n: int, fire: bool, rng: np.random.Generator) -> pd.DataFrame:
         dewpoint_c = rng.normal(10.0, 4.5, n)
         u          = rng.normal(0.0, 2.5, n)
         v          = rng.normal(0.0, 2.5, n)
-        kbdi       = rng.normal(380.0, 130.0, n)
+        erc        = rng.normal(45.0, 18.0, n)
         ndvi       = rng.normal(0.45, 0.15, n)
         sm_surf    = rng.beta(2.5, 5.0, n) * 0.6
         sm_root    = rng.beta(3.0, 4.0, n) * 0.7
@@ -74,7 +74,7 @@ def _sample_class(n: int, fire: bool, rng: np.random.Generator) -> pd.DataFrame:
         "v_component_of_wind_10m": v,
         "ssm":               np.clip(sm_surf, 0.0, 1.0),
         "volumetric_soil_water_layer_3": np.clip(sm_root, 0.0, 1.0),
-        "kbdi_index":        np.clip(kbdi, 0.0, 800.0),
+        "erc":               np.clip(erc, 0.0, 120.0),
         "ndvi":              np.clip(ndvi, -0.2, 1.0),
         "elevation_m":       elevation,
         "slope_deg":         slope,

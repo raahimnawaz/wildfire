@@ -91,9 +91,14 @@ def derive_all(df: pd.DataFrame) -> pd.DataFrame:
     # Final column ordering — fail loud if anything is missing
     missing = [c for c in CFG.feature_columns if c not in out.columns]
     if missing:
+        hint = "Check your data extraction step."
+        if "erc" in missing and "kbdi_index" in out.columns:
+            hint = ("This is a schema-v1 table: its kbdi_index came from a KBDI "
+                    "product that never covered the West Coast (every real row "
+                    "is the fallback 300), and its label is same-week. "
+                    "Re-extract with the current wildfire.data_extraction.")
         raise ValueError(
-            f"Feature matrix is missing required columns: {missing}. "
-            "Check your data extraction step."
+            f"Feature matrix is missing required columns: {missing}. {hint}"
         )
     return out
 

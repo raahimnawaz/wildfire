@@ -13,29 +13,59 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
-| **XGBoost ignition** | Per-cell 7-day fire start probability | ROC-AUC **0.785** · AP 0.0055 (~5× the 0.0011 base rate) at 2 km, May-Oct coverage | Train 2020-2023 · threshold tuned on 2024 · tested once on 2025 · production refit on 2020-2026 incl. season-to-date |
-| **U-Net spread** | Per-pixel next-day fire mask | ROC-AUC **0.903** · AUC-PR **0.295** | Matches Huot et al. ICDM 2022 |
+| **XGBoost ignition** | Per-cell probability of a **new** fire starting in the next 7 days | **Pending retrain on schema v2** — see [the note below](#schema-v2-what-changed-and-why-the-old-numbers-were-withdrawn) | Train 2020-2023 · calibration + threshold on 2024 · tested once on 2025 · production refit on 2020-2026 |
+| **U-Net spread** | Per-pixel next-day fire mask | ROC-AUC **0.903** · AUC-PR **0.295** on NDWS | Comparable to Huot et al. ICDM 2022 (different split — see note) |
+
+### Schema v2: what changed, and why the old numbers were withdrawn
+
+The previous ignition headline (ROC-AUC 0.785, "KBDI + wind dominate") came
+from a model with three problems, now fixed in code. The model needs to be
+re-extracted and retrained before it has a number again:
+
+1. **It was a same-week detector, not a forecast.** Features and the FIRMS
+   label came from the same 7-day window. The label now comes from the week
+   *after* the features, counts only cells not already burning in the prior
+   14 days, and already-burning cells are dropped from training.
+2. **Its top feature was never measured.** The UTOKYO KBDI collection covers
+   60°E–180°E only, so every real West Coast row held the fallback value 300.
+   The only rows where KBDI varied were the synthetic augmented positives
+   (KBDI raised to ≥750). That's why "KBDI" topped the importance chart: it
+   was flagging which rows were synthetic. SMAP v007 also ended in June 2025.
+   KBDI is replaced by GRIDMET ERC and SMAP by v008. Every gap-filled band now
+   carries a `<band>_filled` flag: extraction raises when a source is mostly
+   fill, and training refuses any effectively constant feature.
+3. **Its probabilities weren't probabilities.** The rebalancing left raw
+   scores 9–17× the observed fire rate. They are now Platt-calibrated on the
+   validation year, and the calibration is reported on the untouched test
+   year.
+
+The spread model's serving inputs were also rebuilt: patches now come from
+the sources NDWS was made from (GRIDMET, GRIDMET drought, VIIRS NDVI, MOD14A1)
+and are centred on active fires. The U-Net numbers come from the one-shot
+runner's pooled random split, not NDWS's official test split, so they are
+comparable to the paper rather than a strict reproduction. The live demo and
+screenshot still show the last schema-v1 snapshot until a new one is
+generated.
 
 ## What this is
 
 Two complementary models that together cover the wildfire-prediction lifecycle:
 
 1. **Ignition** — "where might a fire START in the next week?" Boosted-tree
-   classifier on ~24.5M live GEE-extracted West Coast cells covering
-   May-October of 2020-2026 (fire season plus the shoulder season, so
-   early-season predictions are in-distribution rather than calendar
-   extrapolation). Evaluation is fully out-of-time: train 2020-2023, alert
-   threshold tuned on held-out 2024, tested exactly once on 2025 — then the
-   shipped production model is refit on everything, including the 2026
-   season-to-date. Top feature importances (KBDI drought + wind speed) are
-   consistent with the wildfire physics literature, with a caveat stated
-   plainly: the domain-guided augmentation pushes synthetic positives into
-   exactly those regimes, so the importances partly reflect the training
-   design.
+   classifier on GEE-extracted West Coast cells covering May-October of
+   2020-2026 (fire season plus the shoulder season). Features describe one
+   week; the label is a new FIRMS detection in the *following* week, in a
+   cell with no detection in the 14 days before. Evaluation is fully
+   out-of-time: train 2020-2023, calibration and alert threshold fit on
+   held-out 2024, tested exactly once on 2025 — then the shipped production
+   model is refit on everything, including the 2026 season-to-date. Outputs
+   are calibrated probabilities.
 2. **Spread** — "given a fire is burning, what does tomorrow's perimeter look
-   like?" U-Net segmentation on 64×64 km imagery patches with 11 channels
-   (elevation, slope, aspect, NDVI, temp, dewpoint, wind u/v, KBDI, soil
-   moisture, prior fire mask). AUC-PR matches the canonical NDWS benchmark.
+   like?" U-Net segmentation on 64×64 km patches in the Next Day Wildfire
+   Spread schema (elevation, VIIRS NDVI, GRIDMET max/min temperature, wind
+   speed and direction, PDSI, specific humidity, previous-day MODIS fire
+   mask). At serving time, patches are pulled from the same sources and
+   centred on active fires.
 
 A combined dashboard CLI runs both models on any date and produces a
 satellite-style HUD heatmap plus structured outputs (parquet, GeoJSON, JSON).
@@ -46,25 +76,28 @@ satellite-style HUD heatmap plus structured outputs (parquet, GeoJSON, JSON).
 
 | Source | What | Where it lives in the pipeline |
 |---|---|---|
-| **ERA5-Land** (ECMWF) | Hourly weather: temp, dewpoint, wind u/v, soil moisture | Ignition + spread input |
+| **ERA5-Land** (ECMWF) | Hourly weather: temp, dewpoint, wind u/v, soil moisture | Ignition input |
 | **SRTM** (USGS) | 30 m elevation → slope + aspect | Ignition + spread input |
-| **NASA SMAP** | Surface soil moisture | Ignition + spread input |
-| **UTOKYO KBDI** | Keetch-Byram Drought Index | Ignition + spread input |
-| **MODIS NDVI** | 16-day vegetation index composites | Ignition + spread input |
-| **NASA FIRMS** | MODIS T21 thermal anomalies | Ignition labels |
+| **NASA SMAP L4 v008** | Surface soil moisture | Ignition input |
+| **GRIDMET** (U. Idaho) | Energy Release Component (ERC) | Ignition input |
+| **GRIDMET** + **GRIDMET drought** | Daily max/min temp, wind, specific humidity; PDSI | Spread input (serving) |
+| **MODIS NDVI** / **VIIRS NDVI** | 16-day vegetation index composites | Ignition / spread input |
+| **NASA FIRMS** | MODIS T21 thermal anomalies | Ignition labels (next-week new detections), active fires |
+| **MODIS MOD14A1** | Daily fire mask | Spread input (serving) |
 | **Next Day Wildfire Spread** (Huot et al. ICDM 2022) | 18,545 64×64 km patches of real CONUS fires (2012-2020) | Spread training |
 
 ## Repository layout
 
 ```
 wildfire/
-  config.py            central constants (bbox, paths, hyperparams, threshold)
+  config.py            central constants (bbox, paths, label horizon, hyperparams)
   features.py          feature engineering (wind speed, RH, VPD, calendar)
   imbalance.py         domain-guided synthetic minority injection
   synthetic_data.py    offline smoke-test data generator (no GEE auth needed)
-  data_extraction.py   GEE pipeline + extract_window + extract_patch (cached)
-  cache.py             disk cache for GEE results (parquet + npy)
-  train.py             XGBoost training with out-of-time validation + threshold tuning
+  data_extraction.py   GEE pipeline: forecast labels, fill flags, NDWS spread patches (cached)
+  cache.py             disk cache for GEE results (parquet + npy), keyed by schema version
+  calibration.py       Platt calibration + reliability report
+  train.py             XGBoost training: out-of-time validation, calibration, threshold tuning
   predict.py           XGBoost scoring CLI
   dashboard.py         combined ignition + spread CLI
   service.py           interactive per-point risk API (FastAPI)
@@ -74,6 +107,7 @@ wildfire/
   spread/              Phase 2 — next-day fire spread
     config.py
     model.py           ConvLSTM cell + U-Net wrapper (smp)
+    ndws.py            the one NDWS feature → channel mapping
     data.py            Synthetic + NDWS numpy + dependency-free TFRecord parser
     convert_ndws.py    TFRecord → numpy with official train/val/test split
     losses.py          weighted BCE + soft Dice
@@ -127,16 +161,20 @@ GET  /health
 ```
 
 It scores a 32x32 grid of 2 km cells -- the cell size the model was trained on,
-because a 200 m KBDI cell is not a 2 km KBDI cell -- through the same
+because a 200 m soil-moisture cell is not a 2 km one -- through the same
 `_stack_for_window` extraction and `score_dataframe` scoring the dashboard uses,
 so there is no second copy of the feature pipeline to drift out of step.
 
 Three things it deliberately will not do, because an earlier prototype did all
 three:
 
-- **It returns the model's calibrated probabilities, unscaled.** Min-max
+- **It returns the model's probabilities, never rescaled per request.** Min-max
   normalising each response makes a uniformly safe patch render identically to a
-  dangerous one, and pins any "max risk" readout at exactly 100%.
+  dangerous one, and pins any "max risk" readout at exactly 100%. The
+  probabilities are Platt-calibrated on the validation year, and
+  `probability_calibrated` in every response says so (it is false only for an
+  artifact that predates calibration). Ocean, grid padding and cells with a
+  missing source come back as `null` rather than being scored.
 - **Every quality number is read from `wildfire_models/feature_meta.json`** --
   test ROC-AUC, average precision, the validation-tuned threshold and its
   provenance. There is no metric literal in the module, and a metric the
@@ -147,8 +185,10 @@ three:
   and names the fix. It never substitutes synthetic features into a risk map.
 
 There is no uncertainty or saliency field. A boosted tree has no dropout to
-sample, so an uncertainty band here would have been invented; the real
-gain-based feature importance (KBDI 0.66, wind speed 0.29) is served instead.
+sample, so an uncertainty band here would have been invented; the artifact's
+real gain-based feature importance is served instead. An artifact trained on
+a different feature set (for example a schema-v1 model with `kbdi_index`) is a
+503 telling you to retrain, never scored.
 
 ## Engineering decisions worth calling out
 
@@ -160,7 +200,11 @@ Three non-obvious things that took real iteration to get right:
    `.rename()`. The fix: prepend a fully-masked sentinel image with the
    right band name to every collection. Masked pixels don't affect the mean,
    so the band always exists. See `_safe_mean()` in
-   [wildfire/data_extraction.py](wildfire/data_extraction.py).
+   [wildfire/data_extraction.py](wildfire/data_extraction.py). The trick has
+   a cost: it hid two dead sources for a long time (a KBDI product with no
+   West Coast pixels, and SMAP v007 after it ended). The fill value is now
+   paired with a `<band>_filled` flag, and a band that is mostly fill raises
+   `FeatureOutage` instead of reaching the model.
 
 2. **Paged GEE sampling for the 5000-element limit.** `getInfo()` on a
    `FeatureCollection` caps at 5000 features — `numPixels=50000` silently
@@ -168,12 +212,11 @@ Three non-obvious things that took real iteration to get right:
    each under the limit, then concatenated and deduplicated by (lon, lat).
    Effective 10× density at the same per-call cost. See `extract_window()`.
 
-3. **Leak-free threshold tuning.** The hardcoded operational threshold =
-   0.60 produced zero alerts on real data — the fire base rate is ~0.15%,
-   so calibrated probabilities rarely cross 0.60 even when the ranking is
-   good. The threshold is now tuned from the PR curve on a held-out
-   VALIDATION year (2024), frozen into model metadata, and the test year
-   (2025) sees it exactly once. (An earlier version tuned on the test set
+3. **Leak-free calibration and threshold tuning.** The hardcoded
+   operational threshold = 0.60 produced zero alerts on real data — the fire
+   base rate is ~0.15%. Both the Platt calibration and the threshold (from
+   the PR curve) are now fit on a held-out VALIDATION year (2024), frozen
+   into model metadata, and the test year (2025) sees them exactly once. (An earlier version tuned on the test set
    itself, which inflated the reported precision — fixed, and worth
    admitting.) `predict.py` and the dashboard read the tuned value from
    metadata at inference time. See `_tune_threshold()` in
@@ -186,11 +229,15 @@ pip install -r wildfire/requirements.txt
 pytest tests/ -q
 ```
 
-30 smoke tests covering cache hit/miss, feature math (wind speed, RH, VPD,
-dewpoint inversion, calendar), imbalance handling — including thermodynamic
-consistency of augmented rows — out-of-time validation splitting, threshold
-tuning, and synthetic-data schema. All run CPU-only with no external
-dependencies (no GEE, no GPU).
+73 tests covering cache hit/miss and schema keying, feature math (wind
+speed, RH, VPD, dewpoint inversion, calendar), imbalance handling (including
+thermodynamic consistency of augmented rows), forecast-label windows, the
+fill-flag outage guard and dead-feature check, calibration (fit, monotonicity,
+out-of-sample reliability), out-of-time splitting, threshold tuning, the
+NDWS channel mapping, and the risk service end to end against a model that
+`wildfire.train` trains on synthetic data into a temp dir. All run CPU-only
+with no external services (no GEE, no GPU), and none touch the committed
+model artifact.
 
 ## Verification & live runs
 

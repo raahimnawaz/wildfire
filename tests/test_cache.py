@@ -26,6 +26,16 @@ def test_key_window_changes_with_args():
     assert a != b and a != c and b != c
 
 
+def test_key_window_separates_schema_versions_and_serving_pulls():
+    """A window cached under the old schema (same-week label, dead KBDI) or by
+    a serving pull (label week not yet observed) must never be reused for
+    training."""
+    base = key_window("2025-08-01", "2025-08-08", 2000, 40, 4000, version=2)
+    assert base != key_window("2025-08-01", "2025-08-08", 2000, 40, 4000, version=1)
+    assert base != key_window("2025-08-01", "2025-08-08", 2000, 40, 4000, version=2,
+                              labelled=False)
+
+
 def test_key_patch_includes_coords():
     a = key_patch(-118.5, 34.0, "2025-09-08", "2025-09-15", 64, 1.0)
     b = key_patch(-118.5, 34.1, "2025-09-08", "2025-09-15", 64, 1.0)

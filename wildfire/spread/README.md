@@ -68,6 +68,18 @@ python -m wildfire.spread.train --source ndws-tfrecord `
 Our loader includes a **dependency-free TFRecord parser** (no TensorFlow,
 no `tfrecord` pip package — the latter has a known protobuf conflict).
 
+## Channels
+
+The model's 11 channels are named for what they hold in NDWS (see
+[`ndws.py`](ndws.py), the single mapping used by every loader and converter):
+`elevation`, `slope_deg` and `aspect_deg` (zeros, since NDWS has neither),
+`NDVI` (VIIRS, raw ×1e4), `tmmx_c`, `tmmn_c`, `vs`, `vs_cos_th`, `pdsi`,
+`sph`, `PrevFireMask`. The dashboard builds its serving patches from the same
+Earth Engine sources (GRIDMET, GRIDMET drought, VIIRS VNP13A1, MOD14A1) for a
+single day, so each channel means at serving time what it meant in training.
+Checkpoints record their channel list and data source. The dashboard won't
+run a synthetic-trained checkpoint on real imagery.
+
 ## Scoring new patches
 
 ```powershell

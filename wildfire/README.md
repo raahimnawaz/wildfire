@@ -10,10 +10,11 @@ in *Comprehensive Analysis of Wildfire Prediction* (the project's research doc).
 |---|---|
 | **XGBoost binary classifier** | Paper's reference architecture for tabular ignition data. SOTA on this problem class. SHAP-interpretable. |
 | **4 km cell, daily resolution** | Matches paper's reference scale; tractable over the whole West Coast. |
-| **ERA5-Land + SRTM + SMAP + KBDI + NDVI + FIRMS** | Paper's recommended feature stack for the West Coast. |
-| **Domain-guided minority injection** | Paper rejects naive SMOTE. We duplicate fire rows then bump them toward extreme regimes (`+10°C`, `+8 m/s wind`, `KBDI=750`, `RH<=15%`). |
+| **ERA5-Land + SRTM + SMAP L4 + GRIDMET ERC + NDVI + FIRMS** | Paper's recommended stack, with ERC standing in for KBDI (the only KBDI in Earth Engine covers 60°E–180°E, not the West Coast). |
+| **Domain-guided minority injection** | Paper rejects naive SMOTE. We duplicate fire rows then bump them toward extreme regimes (`+10°C`, `+8 m/s wind`, ERC ≥ the training set's 95th percentile, `RH<=15%`). |
 | **Out-of-time train/test split** | Paper flags random K-fold as fatal leakage from spatial+temporal autocorrelation. |
-| **Decision threshold = 0.60** | Paper-validated operational threshold (NOT 0.5). |
+| **Forecast label** | New FIRMS detection in the 7 days *after* the feature window, in a cell not already burning. |
+| **Calibrated probabilities, validation-tuned threshold** | Platt scaling and the alert threshold are both fit on the validation year; the paper's fixed 0.60 produced zero alerts at a ~0.1% base rate. |
 
 The "zenith" architectures from the paper (ConvLSTM for spread, MA-NET
 attention for burned-area regression, PhysFire-WM hybrid PINN) are intentionally
@@ -53,7 +54,7 @@ Outputs in `wildfire_output/2025-09-15/`:
 The dashboard:
 1. Pulls a fresh GEE snapshot of West Coast features for a 7-day window
 2. Scores every ~4 km cell with the XGBoost ignition model
-3. Runs the U-Net spread model on the 50 highest-risk cells
+3. Runs the U-Net spread model on up to 50 active fires, from NDWS-source patches
 4. Writes the four output files above
 
 Skip the spread step with `--ignition-only` (much faster, ignition-only HTML).
@@ -118,10 +119,16 @@ FIRMS values. If anything fails, the script tells you exactly what's wrong.
 
 ### 5. Pull real fire seasons (~10 min each)
 
+Each 7-day feature window is labelled by the FIRMS detections in the week
+after it, so a window is only extracted once that week has been observed.
+Parquets from before schema v2 can't be reused: they carry a same-week label
+and a KBDI column that was a constant fallback. `derive_all` refuses them with
+a message saying so.
+
 ```powershell
 # One command per season; the full protocol uses 2020-2025
-python -m wildfire.data_extraction --year 2024 --out wildfire_data/raw_2024.parquet
-python -m wildfire.data_extraction --year 2025 --out wildfire_data/raw_2025.parquet
+python -m wildfire.data_extraction --year 2024 --out wildfire_data/raw_2024_v2.parquet
+python -m wildfire.data_extraction --year 2025 --out wildfire_data/raw_2025_v2.parquet
 ```
 
 ### 6. Retrain on real data, out-of-time
@@ -132,23 +139,27 @@ test once on the newest, then refit the production model on everything:
 ```powershell
 # Full protocol (recommended — every season contributes to the shipped model)
 python -m wildfire.train `
-    --train wildfire_data/raw_2020.parquet wildfire_data/raw_2021.parquet wildfire_data/raw_2022.parquet wildfire_data/raw_2023.parquet `
-    --val   wildfire_data/raw_2024.parquet `
-    --test  wildfire_data/raw_2025.parquet `
+    --train wildfire_data/raw_2020_v2.parquet wildfire_data/raw_2021_v2.parquet wildfire_data/raw_2022_v2.parquet wildfire_data/raw_2023_v2.parquet `
+    --val   wildfire_data/raw_2024_v2.parquet `
+    --test  wildfire_data/raw_2025_v2.parquet `
     --refit-all
 
 # Smallest setup — two years; validation is split off the last ~20% of
 # training dates automatically when --val is omitted
-python -m wildfire.train --train wildfire_data/raw_2022.parquet `
-                         --test  wildfire_data/raw_2023.parquet
+python -m wildfire.train --train wildfire_data/raw_2022_v2.parquet `
+                         --test  wildfire_data/raw_2023_v2.parquet
 ```
 
 Honest expected metrics on real GEE data (depend on cell density + years available):
 - ROC-AUC 0.65-0.80 with paged sampling at 2 km cells
 - AUC-PR 0.01-0.10 (fire base rate is ~0.1%, so AP is the honest number)
-- Top features come out as KBDI drought + wind speed — consistent with fire
-  physics, but partly shaped by the domain-guided augmentation, which pushes
-  synthetic positives toward exactly those regimes
+- Feature importances are partly shaped by the domain-guided augmentation,
+  which pushes synthetic positives toward hot, windy, high-ERC regimes. Compare
+  against a run with `minority_oversample_factor=0` before reading physics
+  into them. (Schema v1's "KBDI dominates" was the augmentation alone: KBDI
+  only ever varied on synthetic rows.)
+- Test-year calibration (mean predicted vs observed rate, ECE, reliability
+  bins) is in `feature_meta.json` under `metrics.test.calibration`
 
 Expect ~10 minutes per year on the default sampling density (50k samples per
 window). Bump `gee_num_pixels` in `config.py` for denser sampling at the cost

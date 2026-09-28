@@ -17,8 +17,33 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .calibration import apply_calibration
 from .config import CFG
 from .features import derive_all
+
+
+class IncompatibleArtifact(RuntimeError):
+    """The saved model was trained on a different feature set than the
+    pipeline now produces. Scoring it would feed values into the wrong
+    columns, so it is refused rather than guessed at."""
+
+
+def check_artifact(meta: dict) -> None:
+    trained = meta.get("feature_columns")
+    if trained is not None and list(trained) != list(CFG.feature_columns):
+        added = [c for c in CFG.feature_columns if c not in trained]
+        removed = [c for c in trained if c not in CFG.feature_columns]
+        raise IncompatibleArtifact(
+            f"The model artifact was trained on a different feature set "
+            f"(pipeline adds {added}, drops {removed}). Retrain it on freshly "
+            "extracted data: python -m wildfire.run_real"
+        )
+
+
+def probability_is_calibrated(meta: dict) -> bool:
+    """True when fire_probability is a calibrated probability rather than the
+    booster's raw, rebalancing-inflated score."""
+    return bool(meta.get("calibration"))
 
 
 def _load_model():
@@ -32,12 +57,13 @@ def _load_model():
             f"No trained model at {CFG.model_path()}.\n"
             "Train one first:  python -m wildfire.train --synthetic"
         )
-    model = XGBClassifier()
-    model.load_model(str(CFG.model_path()))
-
     meta = {}
     if CFG.feature_meta_path().exists():
         meta = json.loads(CFG.feature_meta_path().read_text())
+    check_artifact(meta)
+
+    model = XGBClassifier()
+    model.load_model(str(CFG.model_path()))
     return model, meta
 
 
@@ -58,7 +84,12 @@ def resolve_threshold(meta: dict) -> float:
 
 
 def score_dataframe(df: pd.DataFrame, threshold: float | None = None) -> pd.DataFrame:
-    """Append fire_probability and fire_alert columns. Non-destructive."""
+    """Append fire_probability and fire_alert columns. Non-destructive.
+
+    fire_probability is calibrated when the artifact carries a calibration
+    (see probability_is_calibrated); the threshold in metadata is on the same
+    scale, so fire_alert is consistent either way.
+    """
     model, meta = _load_model()
     if threshold is None:
         # Operational threshold tuned on the validation year during training.
@@ -68,7 +99,7 @@ def score_dataframe(df: pd.DataFrame, threshold: float | None = None) -> pd.Data
     # idempotent — derive_all is safe to call.
     derived = derive_all(df.copy())
     X = derived[CFG.feature_columns].astype("float32").values
-    proba = model.predict_proba(X)[:, 1]
+    proba = apply_calibration(model.predict_proba(X)[:, 1], meta.get("calibration"))
 
     # Return the DERIVED dataframe (raw cols + engineered cols) with
     # predictions appended. Downstream consumers (heatmap, dashboard) read
@@ -114,7 +145,7 @@ def main():
     print(f"  fire_alert positives : {n_alert:,}")
     if args.top > 0:
         cols = [c for c in ("longitude", "latitude", "date",
-                            "temp_c", "wind_speed_ms", "kbdi_index",
+                            "temp_c", "wind_speed_ms", "erc",
                             "fire_probability") if c in out.columns]
         top = out.sort_values("fire_probability", ascending=False).head(args.top)
         print(f"\nTop {args.top} highest-risk rows:")

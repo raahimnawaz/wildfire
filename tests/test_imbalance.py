@@ -35,7 +35,7 @@ def test_perturbed_minority_pushed_to_extreme_regimes(small_synthetic_df):
 
     # On average the rebalanced positives are pushed toward extreme fire weather
     assert out_pos["temp_c"].mean() > pos["temp_c"].mean()
-    assert out_pos["kbdi_index"].mean() > pos["kbdi_index"].mean()
+    assert out_pos["erc"].mean() > pos["erc"].mean()
     # RH gets pushed DOWN (drier) — sign-flipped check
     assert out_pos["rh_pct"].mean() < pos["rh_pct"].mean()
 
@@ -70,3 +70,14 @@ def test_rebalance_requires_positive_samples(small_synthetic_df):
     df_neg_only = df[df[CFG.target_column] == 0].copy()
     with pytest.raises(ValueError):
         rebalance_training_set(df_neg_only)
+
+
+def test_augmented_erc_stays_inside_the_training_range(small_synthetic_df):
+    """The ERC floor is the training set's own upper quantile and augmented
+    rows are capped at its max, so augmentation can't invent an ERC no real
+    cell reaches (schema v1's KBDI floor of 750 did exactly that)."""
+    from wildfire.features import derive_all
+    derived = derive_all(small_synthetic_df)
+    out = rebalance_training_set(derived)
+    assert out["erc"].max() <= derived["erc"].max() + 1e-9
+    assert out["erc"].min() >= 0.0

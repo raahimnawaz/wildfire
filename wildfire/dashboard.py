@@ -4,11 +4,12 @@ Combined wildfire risk dashboard CLI.
 For a target date (defaults to today), this:
   1. Pulls a fresh GEE snapshot of the West Coast covering a 7-day window
      ending on the target date.
-  2. Scores every cell with the XGBoost ignition model -> per-cell ignition
-     probability for the next 7 days.
-  3. For high-risk cells, queries FIRMS for active hot spots and runs the
-     U-Net spread model on those local patches -> per-pixel next-day spread
-     masks.
+  2. Scores every cell with the XGBoost ignition model -> per-cell
+     probability of a NEW fire starting in the 7 days after the window
+     (calibrated when the model artifact carries a calibration).
+  3. Around cells that are burning now (FIRMS detections in the last two
+     weeks), pulls NDWS-format patches from the same sources the spread
+     U-Net was trained on and predicts next-day spread masks.
   4. Writes a single .geojson + .parquet + .html dashboard summarizing both
      model outputs (ignition map + active-fire spread predictions).
 
@@ -50,7 +51,7 @@ def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
     come back thin or empty. If that happens, walk the window back in 2-day
     steps (up to 8 days) and report the window actually used.
     """
-    from .data_extraction import init_ee, extract_window
+    from .data_extraction import drop_filled_rows, extract_window, init_ee
     from .predict import score_dataframe
 
     init_ee()
@@ -62,8 +63,10 @@ def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
         start = end - timedelta(days=7)
         print(f"[ignition] pulling fresh GEE features for {start} .. {end} ...")
         try:
-            df = extract_window(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-        except Exception as e:  # GEE raises on fully-empty ERA5 windows
+            # labelled=False: the week being forecast hasn't happened yet.
+            df = extract_window(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
+                                labelled=False)
+        except Exception as e:  # GEE raises on fully-empty ERA5 windows; FeatureOutage on dead sources
             print(f"[ignition]   window failed ({e}); trying an earlier window ...", file=sys.stderr)
             last_err = e
             continue
@@ -73,6 +76,10 @@ def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
         if shift_days:
             print(f"[ignition] note: freshest complete data window is {start} .. {end} "
                   f"({shift_days} days behind the target date)")
+        df, n_filled = drop_filled_rows(df)
+        if n_filled:
+            print(f"[ignition] dropped {n_filled:,} cells whose features are gap-fill "
+                  "fallbacks (the model never trained on those values)")
         print(f"[ignition] scoring {len(df):,} cells ...")
         scored = score_dataframe(df)
         return scored, (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
@@ -83,16 +90,46 @@ def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
     )
 
 
+def _active_fire_centers(scored: pd.DataFrame, top_k: int, patch_km: float) -> pd.DataFrame:
+    """Patch centres over cells burning now (FIRMS in the last
+    CFG.label_quiet_days), densest clusters first, at most one per patch.
+
+    The spread model answers "given a fire, where is it tomorrow?" -- run on a
+    patch with no fire it can only predict nothing.
+    """
+    empty = pd.DataFrame(columns=["longitude", "latitude", "burning_cells"])
+    if "fire_recent" not in scored.columns:
+        return empty
+    pts = scored.loc[scored["fire_recent"] == 1, ["longitude", "latitude"]].to_numpy(float)
+    if len(pts) == 0:
+        return empty
+    x_km = pts[:, 0] * 111.0 * np.cos(np.radians(pts[:, 1]))
+    y_km = pts[:, 1] * 111.0
+    half = patch_km / 2.0
+    inside = ((np.abs(x_km[:, None] - x_km[None, :]) <= half)
+              & (np.abs(y_km[:, None] - y_km[None, :]) <= half))
+    density = inside.sum(axis=1)
+    taken = np.zeros(len(pts), dtype=bool)
+    centers = []
+    for i in np.argsort(-density, kind="stable"):
+        if taken[i]:
+            continue
+        centers.append((pts[i, 0], pts[i, 1], int(density[i])))
+        taken |= inside[i]
+        if len(centers) >= top_k:
+            break
+    return pd.DataFrame(centers, columns=["longitude", "latitude", "burning_cells"])
+
+
 def _spread_predictions(scored: pd.DataFrame,
                         top_k: int = 50,
                         target_date: str = "") -> dict:
-    """Run U-Net spread model on REAL GEE imagery patches around the top-risk cells.
+    """Run the U-Net spread model on active fires.
 
-    For each of the top-K highest-risk cells we pull a 64x64 NDWS-format
-    imagery patch from Google Earth Engine (elevation, slope, aspect, NDVI,
-    temperature, dewpoint, wind, KBDI, soil moisture, prior fire mask),
-    feed it to the trained U-Net, and record the predicted next-day spread
-    mask statistics.
+    Patches come from the datasets Next Day Wildfire Spread was built from
+    (GRIDMET weather, GRIDMET PDSI, VIIRS NDVI, MOD14A1 fire mask), for a
+    single day t -- the latest day with both weather and a fire mask -- so each
+    channel means what it meant in training. The prediction is for day t+1.
     """
     try:
         import torch
@@ -102,43 +139,56 @@ def _spread_predictions(scored: pd.DataFrame,
 
     from .spread.config import SPREAD_CFG
     from .spread.model import build_model
-    from .data_extraction import extract_patch
+    from .data_extraction import extract_patch, ndws_input_day
 
     ckpt_path = SPREAD_CFG.model_path()
     if not ckpt_path.exists():
         print(f"[spread] no trained spread model at {ckpt_path}; skipping.")
         return {}
 
-    top = scored.sort_values("fire_probability", ascending=False).head(top_k).reset_index(drop=True)
-    if top.empty:
-        return {}
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if ckpt.get("source") == "synthetic":
+        print("[spread] checkpoint was trained on synthetic patches; skipping real imagery.")
+        return {}
+    trained_channels = ckpt.get("feature_channels")
+    if trained_channels is not None and list(trained_channels) != list(SPREAD_CFG.feature_channels):
+        print(f"[spread] checkpoint channels {trained_channels} differ from "
+              f"{SPREAD_CFG.feature_channels}; skipping.")
+        return {}
+
+    s = SPREAD_CFG.patch_size
+    centers = _active_fire_centers(scored, top_k, patch_km=s * SPREAD_CFG.cell_resolution_m / 1000.0)
+    if centers.empty:
+        print("[spread] no active fires in the scored cells; nothing to forecast.")
+        return {"target_date": target_date, "patches": [], "note": "no active fires"}
+
+    try:
+        day = ndws_input_day(target_date or datetime.utcnow().strftime("%Y-%m-%d"))
+    except Exception as e:
+        print(f"[spread] no complete NDWS inputs near {target_date}: {e}", file=sys.stderr)
+        return {}
+
     model = build_model(ckpt["arch"], ckpt["in_channels"], ckpt["lookback_days"]).to(device)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-
-    s = SPREAD_CFG.patch_size
     T = ckpt["lookback_days"]
+    prev_idx = list(SPREAD_CFG.feature_channels).index("PrevFireMask")
 
-    # Date window for the imagery patches: 7-day lookback ending at target_date
-    end = datetime.strptime(target_date, "%Y-%m-%d").date() if target_date else datetime.utcnow().date()
-    start = end - timedelta(days=7)
-    day_start = start.strftime("%Y-%m-%d")
-    day_end   = end.strftime("%Y-%m-%d")
-
-    print(f"[spread] pulling real GEE imagery patches for {len(top)} top-risk cells "
-          f"(this calls GEE per patch — slower but accurate) ...")
+    print(f"[spread] {len(centers)} active-fire patches, inputs from {day} "
+          f"(predicting {day} + 1 day) ...")
 
     spread_results = []
-    for i, row in top.iterrows():
+    for i, row in centers.iterrows():
         lon, lat = float(row["longitude"]), float(row["latitude"])
         try:
-            patch = extract_patch(lon, lat, day_start, day_end,
-                                  size_px=s, pixel_km=1.0)            # (C, H, W)
+            patch, valid_fraction = extract_patch(lon, lat, day, size_px=s, pixel_km=1.0)
         except Exception as e:
             print(f"  patch {i} skipped ({lon:.3f}, {lat:.3f}): {e}", file=sys.stderr)
+            continue
+        if valid_fraction < 0.8:
+            print(f"  patch {i} skipped ({lon:.3f}, {lat:.3f}): only "
+                  f"{valid_fraction:.0%} of it has weather data (coast / border)")
             continue
 
         x = np.broadcast_to(patch[None], (T, *patch.shape)).copy()    # (T, C, H, W)
@@ -150,30 +200,36 @@ def _spread_predictions(scored: pd.DataFrame,
         spread_results.append({
             "longitude": lon,
             "latitude":  lat,
-            "ignition_probability": float(row["fire_probability"]),
+            "burning_cells_nearby": int(row["burning_cells"]),
+            "prev_fire_pixels": int((patch[prev_idx] == 1).sum()),
+            "valid_fraction": float(valid_fraction),
             "spread_prob_max":  float(prob.max()),
             "spread_prob_mean": float(prob.mean()),
             "spread_pixels_above_50pct": int((prob >= 0.5).sum()),
             "spread_mask_shape": list(prob.shape),
-            "patch_source": "real_gee_imagery",
         })
 
     return {
         "target_date": target_date,
+        "input_day": day,
         "top_k": top_k,
-        "patch_source": "real_gee_imagery",
+        "patch_source": "ndws_sources_gee",
+        "centred_on": f"active fires (FIRMS, last {CFG.label_quiet_days} days)",
         "patches": spread_results,
     }
+
+
+def _load_meta() -> dict:
+    if CFG.feature_meta_path().exists():
+        return json.loads(CFG.feature_meta_path().read_text())
+    return {}
 
 
 def _resolve_meta_threshold() -> float:
     """The threshold actually applied to fire_alert (validation-tuned, from
     model metadata) — shown in the HTML so display matches behavior."""
     from .predict import resolve_threshold
-    meta = {}
-    if CFG.feature_meta_path().exists():
-        meta = json.loads(CFG.feature_meta_path().read_text())
-    return resolve_threshold(meta)
+    return resolve_threshold(_load_meta())
 
 
 def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_date: str,
@@ -196,7 +252,7 @@ def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_dat
                     "fire_alert":       int(r["fire_alert"]),
                     "temp_c":           float(r.get("temp_c", 0.0)),
                     "wind_speed_ms":    float(r.get("wind_speed_ms", 0.0)),
-                    "kbdi_index":       float(r.get("kbdi_index", 0.0)),
+                    "erc":              float(r.get("erc", 0.0)),
                 },
             }
             for _, r in scored.iterrows()
@@ -205,10 +261,14 @@ def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_dat
     (out_dir / f"ignition_{target_date}.geojson").write_text(json.dumps(geojson))
 
     # Summary JSON (always lightweight)
+    from .predict import probability_is_calibrated
+    meta = _load_meta()
     target_month = datetime.strptime(target_date, "%Y-%m-%d").month
     summary = {
         "target_date": target_date,
         "data_window": {"start": data_window[0], "end": data_window[1]} if data_window else None,
+        "forecast": (meta.get("label") or {}).get("definition"),
+        "probability_calibrated": probability_is_calibrated(meta),
         "operational_threshold": _resolve_meta_threshold(),
         "n_cells_scored": int(len(scored)),
         "n_high_risk_cells": int((scored["fire_alert"] == 1).sum()),
@@ -229,11 +289,14 @@ def _write_outputs(scored: pd.DataFrame, spread: dict, out_dir: Path, target_dat
 
 def _write_html_dashboard(scored: pd.DataFrame, spread: dict, out_dir: Path,
                           target_date: str, summary: dict) -> None:
+    calibrated = summary.get("probability_calibrated")
+    p_label = "P(new fire, 7 d)" if calibrated else "Risk score (uncalibrated)"
+    fmt_p = (lambda p: f"{p:.2%}") if calibrated else (lambda p: f"{p:.3f}")
     top = scored.sort_values("fire_probability", ascending=False).head(20)
     top_rows = "".join(
         f"<tr><td>{r['longitude']:.3f}</td><td>{r['latitude']:.3f}</td>"
-        f"<td>{r['fire_probability']:.3f}</td><td>{r.get('temp_c', 0):.1f}</td>"
-        f"<td>{r.get('wind_speed_ms', 0):.1f}</td><td>{r.get('kbdi_index', 0):.0f}</td></tr>"
+        f"<td>{fmt_p(r['fire_probability'])}</td><td>{r.get('temp_c', 0):.1f}</td>"
+        f"<td>{r.get('wind_speed_ms', 0):.1f}</td><td>{r.get('erc', 0):.0f}</td></tr>"
         for _, r in top.iterrows()
     )
 
@@ -241,14 +304,14 @@ def _write_html_dashboard(scored: pd.DataFrame, spread: dict, out_dir: Path,
     if spread.get("patches"):
         spread_rows = "".join(
             f"<tr><td>{p['longitude']:.3f}</td><td>{p['latitude']:.3f}</td>"
-            f"<td>{p['ignition_probability']:.3f}</td><td>{p['spread_prob_max']:.3f}</td>"
+            f"<td>{p['prev_fire_pixels']}</td><td>{p['spread_prob_max']:.3f}</td>"
             f"<td>{p['spread_pixels_above_50pct']}</td></tr>"
             for p in spread["patches"][:20]
         )
         spread_section = f"""
-        <h2>Top {len(spread['patches'])} fire-spread predictions (U-Net on high-risk cells)</h2>
+        <h2>Next-day spread on {len(spread['patches'])} active fires (U-Net, inputs from {spread.get('input_day')})</h2>
         <table>
-          <thead><tr><th>Lon</th><th>Lat</th><th>Ignition p</th><th>Max spread p</th><th>Fire pixels @50%</th></tr></thead>
+          <thead><tr><th>Lon</th><th>Lat</th><th>Fire px (day t)</th><th>Max spread p</th><th>Fire pixels @50%</th></tr></thead>
           <tbody>{spread_rows}</tbody>
         </table>
         """
@@ -276,13 +339,13 @@ tr:nth-child(even) {{ background: #fafafa; }}
 <div>
   <div class="card"><div class="v">{summary["n_cells_scored"]:,}</div><div class="l">Cells scored</div></div>
   <div class="card"><div class="v">{summary["n_high_risk_cells"]:,}</div><div class="l">High-risk alerts</div></div>
-  <div class="card"><div class="v">{summary["max_ignition_probability"]:.3f}</div><div class="l">Peak ignition prob</div></div>
+  <div class="card"><div class="v">{fmt_p(summary["max_ignition_probability"])}</div><div class="l">Peak {p_label}</div></div>
   <div class="card"><div class="v">{len(spread.get("patches", []))}</div><div class="l">Spread predictions</div></div>
 </div>
 
 <h2>Top 20 highest-risk cells</h2>
 <table>
-  <thead><tr><th>Lon</th><th>Lat</th><th>Ignition p</th><th>Temp (°C)</th><th>Wind (m/s)</th><th>KBDI</th></tr></thead>
+  <thead><tr><th>Lon</th><th>Lat</th><th>{p_label}</th><th>Temp (°C)</th><th>Wind (m/s)</th><th>ERC</th></tr></thead>
   <tbody>{top_rows}</tbody>
 </table>
 
@@ -298,7 +361,7 @@ tr:nth-child(even) {{ background: #fafafa; }}
 (tuned on the validation year, read from model metadata).
 {f"Data window: {summary['data_window']['start']} → {summary['data_window']['end']}." if summary.get("data_window") else ""}
 {f"<br><b>Note:</b> {summary['out_of_season_note']}" if summary.get("out_of_season_note") else ""}
-<br>Spread predictions run U-Net on real GEE imagery patches around top-risk cells —
+<br>Spread predictions run the U-Net on NDWS-format patches around active fires —
 research/triage signal, not perimeter-accurate forecasts.</p>
 </body></html>
 """
