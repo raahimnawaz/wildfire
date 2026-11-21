@@ -178,7 +178,8 @@ three:
 
 There is no uncertainty or saliency field. A boosted tree has no dropout to
 sample, so an uncertainty band here would have been invented; the real
-gain-based feature importance (KBDI 0.66, wind speed 0.29) is served instead.
+gain-based feature importance is served instead (see the KBDI issue below
+before reading anything into it).
 
 ## What the model does not see
 
@@ -192,19 +193,34 @@ Engine), and a lightning source. Each needs extraction, a retrain and a
 re-evaluation; the FIRMS labels do not record cause, so the gain has to be
 measured, not assumed.
 
-## Known issue: KBDI is a constant at scoring time
+## Known issue: KBDI never covered California, and the model learned a shortcut
 
-In both shipped snapshots (2025-09-15, 2026-07-22) `kbdi_index` is exactly
-300 in every cell. That is the fallback `_kbdi()` in
-[wildfire/data_extraction.py](wildfire/data_extraction.py) substitutes when
-the `UTOKYO/WTLAB/KBDI/v1` collection has no images in the window, so the
-model's most important feature (gain 0.66) carries no information in these
-maps, and it is not neutral: the per-cell contributions show the fallback
-lowering every cell's score by 0.9 to 1.9 log-odds. The map says so
-and shows KBDI as "no data" instead of 300. Fixing it means checking that
-collection's date coverage on Earth Engine, finding how much of the training
-data also hit the fallback, and either switching to a current drought source
-or computing KBDI from ERA5 precipitation and temperature, then retraining.
+`UTOKYO/WTLAB/KBDI/v1` is current (images through 2026-11-17) but covers
+Asia-Pacific only, 60°E to 180°E: on the same dates Tokyo returns 39 and
+Sydney 377 while Fresno returns nothing. Every California and West Coast row,
+in training and at scoring, therefore carries the 300 fallback from `_kbdi()`
+in [wildfire/data_extraction.py](wildfire/data_extraction.py).
+
+The only rows that ever had another value are the synthetic fire rows
+`imbalance.py` creates, which set KBDI to at least 750 (plus noise). The
+shipped model learned exactly that rule. Measured on every cell of the
+2026-07-22 snapshot by setting KBDI and re-scoring:
+
+| KBDI | mean p | cells on alert |
+|---|---|---|
+| 0 to 700 | 0.042 | 2.6% |
+| 710 and up | 0.977 | 100% |
+
+So KBDI's top importance (0.66) is the augmentation's signature, not drought
+physics. The same probe shows wind rising steeply only between 6 and 8 m/s,
+above the real 99th percentile of 4.5 m/s (the augmentation adds 8 m/s), and
+no response at all to temperature (20 to 50 °C) or humidity (5 to 50%).
+
+The fix is two changes and a retrain: a drought measure that covers
+California (gridMET's drought and fuel-dryness fields on Earth Engine, or KBDI
+computed from ERA5 precipitation and temperature), and an augmentation that
+does not push synthetic positives outside the range of real data. The map
+labels KBDI as "no data" until then.
 
 ## Engineering decisions worth calling out
 

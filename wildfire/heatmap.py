@@ -486,6 +486,7 @@ h2 small { color: var(--dim); font-weight: 400; letter-spacing: 0; text-transfor
 .item .d { color: var(--muted); font-size: 12px; }
 .item .meter { grid-column: 1 / -1; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .item .meter i { display: block; height: 100%; background: var(--amber); }
+.more-row { display: flex; gap: 16px; }
 .more { color: var(--muted); font-size: 12px; padding: 8px 4px; }
 .more:hover { color: var(--text); }
 .legend .bar { display: flex; height: 8px; border-radius: 2px; overflow: hidden; }
@@ -824,11 +825,21 @@ _JS = r"""
 
     document.querySelectorAll('[data-county]').forEach(el => el.addEventListener('click', () => showCounty(+el.dataset.county)));
     document.querySelectorAll('[data-hotspot]').forEach(el => el.addEventListener('click', () => showHotspot(+el.dataset.hotspot)));
-    const more = $('#more-counties');
-    if (more) more.addEventListener('click', () => {
-      document.querySelectorAll('.item.extra').forEach(el => { el.hidden = !el.hidden; });
-      more.textContent = more.textContent.startsWith('Show') ? 'Show fewer' : `Show all ${C.counties.length} counties`;
-    });
+    // County list: top 10, then 10 more per click, or all; collapses back to 10.
+    const more = $('#more-counties'), all = $('#all-counties');
+    const rows = [...document.querySelectorAll('[data-county]')];
+    let shown = 10;
+    function showRows(k) {
+      shown = Math.min(k, rows.length);
+      rows.forEach((el, j) => { el.hidden = j >= shown; });
+      const full = shown >= rows.length;
+      more.textContent = full ? 'Show top 10' : `Show ${Math.min(10, rows.length - shown)} more`;
+      all.hidden = full;
+    }
+    if (more) {
+      more.addEventListener('click', () => showRows(shown >= rows.length ? 10 : shown + 10));
+      all.addEventListener('click', () => showRows(rows.length));
+    }
   });
 })();
 """
@@ -888,7 +899,7 @@ def _page(grid: dict, scored: pd.DataFrame, meta: dict, target_date: str,
     else:
         badges.append(("info", "Weather window not recorded"))
     if stale:
-        badges.append(("warn", "KBDI missing · fallback used"))
+        badges.append(("warn", "No KBDI for California"))
     if summary.get("rescored"):
         badges.append(("info", "Re-scored with current model"))
     badges.append(("info", f"Model fit: {html.escape(trained_region)}" if trained_region
@@ -902,13 +913,11 @@ def _page(grid: dict, scored: pd.DataFrame, meta: dict, target_date: str,
         f'<span class="d">{h["n"]:,} alert cells · ~{h["n"] * (CFG.cell_scale_m / 1000) ** 2:,.0f} km²</span><span class="d"></span></button>'
         for k, h in enumerate(hs)
     ) or '<p class="muted" style="padding:8px 4px">No alert clusters today.</p>'
-    max_share = max((c["share"] for c in counties), default=0) or 1
     county_html = "".join(
         f'<button class="item{" extra" if k >= 10 else ""}" data-county="{c["i"]}"{" hidden" if k >= 10 else ""}>'
         f'<span class="n">{html.escape(c["name"])}</span>'
         f'<span class="r" style="color:{ramp_color(c["peak"], threshold)}">{c["peak"]:.3f}</span>'
-        f'<span class="d">{c["alerts"]:,} alert cells · {100 * c["share"]:.1f}% of sampled</span><span class="d">peak</span>'
-        f'<span class="meter"><i style="width:{100 * c["share"] / max_share:.1f}%"></i></span></button>'
+        f'<span class="d">{c["alerts"]:,} alert cells</span><span class="d">peak</span></button>'
         for k, c in enumerate(counties)
     )
     legend_cells = "".join(f'<i style="background:{ramp_color(threshold * x / 20, threshold)}"></i>'
@@ -932,9 +941,9 @@ def _page(grid: dict, scored: pd.DataFrame, meta: dict, target_date: str,
     js = (_JS.replace("__CONFIG__", json.dumps(config, separators=(",", ":")))
              .replace("__COUNTIES__", json.dumps(region.counties(), separators=(",", ":"))))
     gen_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    stale_note = ("<br><b style='color:var(--amber)'>KBDI</b> the KBDI source returned no images for this "
-                  "window, so every cell was scored with the 300 fallback. The model reads that as moist "
-                  "ground: it lowers every cell's score.") if stale else ""
+    stale_note = ("<br><b style='color:var(--amber)'>KBDI</b> the KBDI source covers Asia-Pacific only, so "
+                  "California has no values and every cell, in training too, carries the 300 fallback. "
+                  "The model's KBDI importance comes from synthetic training rows, not drought.") if stale else ""
     model_region = html.escape(trained_region) if trained_region else "California, Oregon and Washington"
 
     return f"""<!doctype html>
@@ -979,7 +988,7 @@ def _page(grid: dict, scored: pd.DataFrame, meta: dict, target_date: str,
 
         <h2>Counties <small>by alert cells</small></h2>
         <div class="list">{county_html}</div>
-        {f'<button class="more" id="more-counties">Show all {len(counties)} counties</button>' if len(counties) > 10 else ''}
+        {f'<div class="more-row"><button class="more" id="more-counties">Show 10 more</button><button class="more" id="all-counties">Show all {len(counties)}</button></div>' if len(counties) > 10 else ''}
 
         <h2>Map scale</h2>
         <div class="legend">
