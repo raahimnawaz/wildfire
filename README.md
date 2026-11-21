@@ -9,6 +9,8 @@ An operational two-stage wildfire prediction pipeline for the US West Coast.
 Trained on **real** Google Earth Engine satellite data and the canonical
 **Next Day Wildfire Spread** benchmark from Google Research.
 
+> **Planned for** [wildfire-vtol](https://github.com/raahimnawaz/wildfire-vtol), whose drone fleet will feed live fire perimeters and fuel moisture into this model for 1–36 hour forecasts in the field.
+
 > **▶ Click the screenshot below or the live-demo badge above to open the interactive dashboard** — pan, zoom, click cells for popups, click rows in the top-10 table to fly the map to that location.
 
 | Model | Task | Real-data metrics | Benchmark |
