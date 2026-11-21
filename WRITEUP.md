@@ -3,6 +3,10 @@
 How I built an operational two-stage wildfire prediction pipeline for the US
 West Coast, what went wrong along the way, and how I fixed it. ~1,000 words.
 
+> **Scope update (2026-11-21):** the pipeline now samples, scores and maps
+> California only. This writeup describes the West Coast build that produced
+> the shipped model and its metrics.
+
 ---
 
 ## The problem

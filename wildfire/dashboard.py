@@ -2,7 +2,7 @@
 Combined wildfire risk dashboard CLI.
 
 For a target date (defaults to today), this:
-  1. Pulls a fresh GEE snapshot of the West Coast covering a 7-day window
+  1. Pulls a fresh GEE snapshot of California covering a 7-day window
      ending on the target date.
   2. Scores every cell with the XGBoost ignition model -> per-cell ignition
      probability for the next 7 days.
@@ -52,6 +52,7 @@ def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
     """
     from .data_extraction import init_ee, extract_window
     from .predict import score_dataframe
+    from .region import restrict as restrict_to_region
 
     init_ee()
 
@@ -74,7 +75,7 @@ def _ignition_scores(target_date: str) -> tuple[pd.DataFrame, tuple[str, str]]:
             print(f"[ignition] note: freshest complete data window is {start} .. {end} "
                   f"({shift_days} days behind the target date)")
         print(f"[ignition] scoring {len(df):,} cells ...")
-        scored = score_dataframe(df)
+        scored = restrict_to_region(score_dataframe(df))
         return scored, (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
 
     raise RuntimeError(
@@ -255,7 +256,7 @@ def _write_html_dashboard(scored: pd.DataFrame, spread: dict, out_dir: Path,
 
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"/>
-<title>West Coast Wildfire Risk — {target_date}</title>
+<title>California Wildfire Risk — {target_date}</title>
 <style>
 body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }}
 h1 {{ border-bottom: 2px solid #d33; padding-bottom: .3em; }}
@@ -270,7 +271,7 @@ tr:nth-child(even) {{ background: #fafafa; }}
 .meta {{ color: #888; font-size: .85em; }}
 </style>
 </head><body>
-<h1>West Coast wildfire risk — {target_date}</h1>
+<h1>California wildfire risk — {target_date}</h1>
 <p class="meta">Generated {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}. Models: XGBoost ignition + U-Net spread.</p>
 
 <div>

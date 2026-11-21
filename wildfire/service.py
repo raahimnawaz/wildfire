@@ -304,7 +304,7 @@ def create_app():
     from pydantic import BaseModel, Field
 
     app = FastAPI(
-        title="West Coast wildfire ignition risk",
+        title="California wildfire ignition risk",
         description=__doc__,
     )
 
@@ -340,6 +340,12 @@ def create_app():
 
     @app.post("/predict")
     def predict(req: PredictRequest) -> dict:
+        from .region import contains
+        if not contains(req.lon, req.lat)[0]:
+            raise HTTPException(
+                status_code=422,
+                detail=f"({req.lat}, {req.lon}) is outside {CFG.region_name}; "
+                       "the model only scores California.")
         try:
             return risk_grid(req.lat, req.lon, req.target_date, grid=req.grid)
         except ModelUnavailable as exc:

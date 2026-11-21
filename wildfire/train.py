@@ -1,5 +1,5 @@
 """
-Train the West Coast wildfire ignition predictor.
+Train the California wildfire ignition predictor.
 
 Pipeline:
   1. Load train / validation / test parquets (or synthesize them).
@@ -44,6 +44,7 @@ import pandas as pd
 from .config import CFG
 from .features import derive_all
 from .imbalance import rebalance_training_set, scale_pos_weight
+from .region import restrict as restrict_to_region
 
 
 def _prep(df: pd.DataFrame) -> pd.DataFrame:
@@ -96,7 +97,13 @@ def _load_concat(paths: List[Path], label: str) -> pd.DataFrame:
     dfs = []
     for p in paths:
         print(f"[train] loading {p} -> {label}")
-        dfs.append(_prep(pd.read_parquet(p)))
+        raw = pd.read_parquet(p)
+        if {"longitude", "latitude"} <= set(raw.columns):
+            kept = restrict_to_region(raw)
+            if len(kept) < len(raw):
+                print(f"[train]   kept {len(kept):,} / {len(raw):,} rows inside {CFG.region_name}")
+            raw = kept
+        dfs.append(_prep(raw))
     out = pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
     if len(paths) > 1:
         print(f"[train] concatenated {len(paths)} {label} parquets: {len(out):,} rows total")
@@ -362,6 +369,7 @@ def train(synthetic: bool = False,
             "test_years": test_years,
             "refit_all": bool(refit_all),
             "production_years": production_years,
+            "region": CFG.region_name,
         },
         # Legacy display keys (heatmap KPI panel and older consumers)
         "train_year": (f"{train_years[0]}-{train_years[-1]}" if len(train_years) > 1
@@ -385,7 +393,7 @@ def train(synthetic: bool = False,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train the West Coast wildfire ignition model.")
+    parser = argparse.ArgumentParser(description="Train the California wildfire ignition model.")
     parser.add_argument("--synthetic", action="store_true",
                         help="Run on a synthetic dataset (no GEE auth required).")
     parser.add_argument("--train", type=Path, nargs="+", default=None,

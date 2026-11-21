@@ -39,9 +39,9 @@ def _hash(parts: dict) -> str:
 
 
 def key_window(day_start: str, day_end: str, scale_m: int, pages: int,
-               pixels_per_page: int) -> str:
+               pixels_per_page: int, region: str = "California") -> str:
     h = _hash({
-        "kind": "window",
+        "kind": "window", "region": region,
         "day_start": day_start, "day_end": day_end,
         "scale_m": scale_m, "pages": pages, "pixels_per_page": pixels_per_page,
     })

@@ -7,7 +7,7 @@ After you have set up Kaggle and/or GEE credentials, run:
 
 This script auto-detects which credentials are present and runs:
   * Kaggle (NDWS spread data)  -> download + train U-Net for next-day spread
-  * GEE (West Coast ignition)  -> extract 2 fire seasons + retrain XGBoost
+  * GEE (California ignition)  -> extract 2 fire seasons + retrain XGBoost
 
 Anything not authenticated is skipped with a clear message of what you need
 to do. The script is idempotent — re-running picks up where it left off.

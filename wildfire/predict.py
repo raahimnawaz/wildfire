@@ -1,5 +1,5 @@
 """
-Score new observations with a trained West Coast wildfire model.
+Score new observations with a trained California wildfire model.
 
 Two ways to call it:
   1. Pass a CSV/parquet of feature rows (with raw GEE column names OR the

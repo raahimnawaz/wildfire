@@ -1,7 +1,7 @@
-# West Coast Wildfire Ignition Predictor
+# California Wildfire Ignition Predictor
 
 A working ML pipeline that predicts daily wildfire ignition probability for
-each ~4 km cell on the US West Coast. Built directly from the recommendations
+each 2 km cell in California. Built directly from the recommendations
 in *Comprehensive Analysis of Wildfire Prediction* (the project's research doc).
 
 ## What this is
@@ -9,8 +9,8 @@ in *Comprehensive Analysis of Wildfire Prediction* (the project's research doc).
 | Choice | Reason (per paper) |
 |---|---|
 | **XGBoost binary classifier** | Paper's reference architecture for tabular ignition data. SOTA on this problem class. SHAP-interpretable. |
-| **4 km cell, daily resolution** | Matches paper's reference scale; tractable over the whole West Coast. |
-| **ERA5-Land + SRTM + SMAP + KBDI + NDVI + FIRMS** | Paper's recommended feature stack for the West Coast. |
+| **2 km cell, 7-day window** | The paper's 4 km blurred out too many positive labels; 2 km gives ~4× more per fire. |
+| **ERA5-Land + SRTM + SMAP + KBDI + NDVI + FIRMS** | Paper's recommended feature stack. |
 | **Domain-guided minority injection** | Paper rejects naive SMOTE. We duplicate fire rows then bump them toward extreme regimes (`+10°C`, `+8 m/s wind`, `KBDI=750`, `RH<=15%`). |
 | **Out-of-time train/test split** | Paper flags random K-fold as fatal leakage from spatial+temporal autocorrelation. |
 | **Decision threshold = 0.60** | Paper-validated operational threshold (NOT 0.5). |
@@ -51,8 +51,8 @@ Outputs in `wildfire_output/2025-09-15/`:
 - `summary_2025-09-15.json` — top-level metrics + per-patch spread predictions
 
 The dashboard:
-1. Pulls a fresh GEE snapshot of West Coast features for a 7-day window
-2. Scores every ~4 km cell with the XGBoost ignition model
+1. Pulls a fresh GEE snapshot of California features for a 7-day window
+2. Scores every sampled 2 km cell with the XGBoost ignition model
 3. Runs the U-Net spread model on the 50 highest-risk cells
 4. Writes the four output files above
 

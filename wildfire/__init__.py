@@ -1,4 +1,4 @@
-"""West Coast wildfire ignition prediction package."""
+"""California wildfire ignition prediction package."""
 
 from .config import CFG
 

@@ -1,5 +1,5 @@
 """
-Google Earth Engine extraction pipeline for the West Coast wildfire model.
+Google Earth Engine extraction pipeline for the California wildfire model.
 
 Pulls the paper-recommended feature stack:
   * ERA5-Land (temperature, dewpoint, wind components, root-zone soil moisture)
@@ -15,7 +15,7 @@ Authentication (one-time):
     import ee; ee.Initialize(project='your-gcp-project-id')
 
 Runtime is dominated by the FeatureCollection.getInfo() call — expect ~10 min
-per year over the full West Coast at the configured sampling density.
+per year over California at the configured sampling density.
 """
 
 from __future__ import annotations
@@ -80,9 +80,9 @@ def init_ee(project: Optional[str] = None) -> None:
         ee.Initialize()
 
 
-def _west_coast_geometry(ee_module):
-    w, s, e, n = CFG.west_coast_bbox
-    return ee_module.Geometry.Rectangle([w, s, e, n])
+def _region_geometry(ee_module):
+    from .region import ee_geometry
+    return ee_geometry(ee_module)
 
 
 def _era5_daily(ee, day_start: str, day_end: str, geom):
@@ -185,7 +185,7 @@ def _firms_label(ee, day_start, day_end, geom):
 
 def _stack_for_window(ee, day_start: str, day_end: str, geom=None):
     if geom is None:
-        geom = _west_coast_geometry(ee)
+        geom = _region_geometry(ee)
     stack = (
         _era5_daily(ee, day_start, day_end, geom)
             .addBands(_srtm_topography(ee, geom))
@@ -336,7 +336,7 @@ def extract_window(day_start: str, day_end: str,
                    n_pages: Optional[int] = None,
                    use_cache: bool = True) -> pd.DataFrame:
     """
-    Sample the GEE feature stack across the West Coast for one date window.
+    Sample the GEE feature stack across California for one date window.
     Paged: runs n_pages independent samples with different seeds and concats.
     Cached on disk by (day_start, day_end, scale, pages, pixels_per_page) —
     repeated calls hit disk instead of GEE.
@@ -345,7 +345,8 @@ def extract_window(day_start: str, day_end: str,
 
     per_call = n_pixels or CFG.gee_num_pixels
     pages    = n_pages  or CFG.gee_pages_per_window
-    key = key_window(day_start, day_end, CFG.cell_scale_m, pages, per_call)
+    key = key_window(day_start, day_end, CFG.cell_scale_m, pages, per_call,
+                     region=CFG.region_name)
 
     return get_or_compute_parquet(
         key,

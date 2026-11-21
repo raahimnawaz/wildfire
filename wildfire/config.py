@@ -1,9 +1,9 @@
 """
-Central configuration for the West Coast wildfire predictor.
+Central configuration for the California wildfire predictor.
 
 Key choices follow the project's research doc ("Comprehensive Analysis of
 Wildfire Prediction"), adapted where real-data iteration disagreed with it:
-  - West Coast bbox and Aug-Oct fire-season window
+  - California study region (state polygon, see region.py) and Aug-Oct fire season
   - 2 km cell resolution (the doc's 4 km blurred out too many positive labels)
   - Out-of-time train/val/test split by year (random K-fold leaks temporally)
   - The operational decision threshold is tuned on the validation year during
@@ -24,8 +24,11 @@ MODEL_DIR = PROJECT_ROOT / "wildfire_models"
 
 @dataclass(frozen=True)
 class WildfireConfig:
-    # Geography — US West Coast (CA + OR + WA, includes coastal NV bleed)
-    west_coast_bbox: tuple = (-124.73, 32.53, -114.13, 49.00)  # (W, S, E, N)
+    # Geography — California. The exact boundary lives in region.py (TIGER
+    # state polygon on GEE, bundled county polygons locally); the bbox only
+    # frames maps and bounds synthetic sampling.
+    region_name: str = "California"
+    region_bbox: tuple = (-124.48, 32.53, -114.13, 42.01)  # (W, S, E, N)
     crs: str = "EPSG:4326"
     cell_scale_m: int = 2000  # 4km blurred too much; 2km gives 4x more positive labels per fire
 
@@ -43,7 +46,7 @@ class WildfireConfig:
 
     # GEE sampling
     gee_num_pixels: int = 4_000   # per-call cap (GEE getInfo() hard limit is 5000)
-    gee_pages_per_window: int = 40  # 4x bumped for 2km: keeps coverage at ~30% of cells
+    gee_pages_per_window: int = 40  # dedup leaves ~40k unique California cells (~37% of the 2 km grid)
     gee_tile_scale: int = 4
     gee_seed: int = 42
 

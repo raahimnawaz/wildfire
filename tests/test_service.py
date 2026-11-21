@@ -244,3 +244,17 @@ def test_predict_returns_503_when_earth_engine_has_nothing(monkeypatch):
     response = client.post("/predict", json={"lat": 40.0, "lon": -121.0})
     assert response.status_code == 503
     assert "no GEE data" in response.json()["detail"]
+
+
+def test_predict_rejects_points_outside_california():
+    """Reno is a few km from the state line; the model must not score it."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx", reason="fastapi.testclient needs httpx")
+    from fastapi.testclient import TestClient
+
+    from wildfire import service
+
+    client = TestClient(service.create_app())
+    response = client.post("/predict", json={"lat": 39.53, "lon": -119.81})
+    assert response.status_code == 422
+    assert "outside California" in response.json()["detail"]

@@ -1,17 +1,17 @@
-# West Coast Wildfire Prediction
+# California Wildfire Prediction
 
 [![tests](https://github.com/raahimnawaz/wildfire/actions/workflows/tests.yml/badge.svg)](https://github.com/raahimnawaz/wildfire/actions/workflows/tests.yml)
 [![daily-dashboard](https://github.com/raahimnawaz/wildfire/actions/workflows/daily-dashboard.yml/badge.svg)](https://github.com/raahimnawaz/wildfire/actions/workflows/daily-dashboard.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Live demo](https://img.shields.io/badge/%E2%96%B6_Open-Live_interactive_dashboard-00d4ff?style=for-the-badge&labelColor=050810)](https://raahimnawaz.github.io/wildfire/)
 
-An operational two-stage wildfire prediction pipeline for the US West Coast.
+An operational two-stage wildfire prediction pipeline for California.
 Trained on **real** Google Earth Engine satellite data and the canonical
 **Next Day Wildfire Spread** benchmark from Google Research.
 
 > **Planned for** [wildfire-vtol](https://github.com/raahimnawaz/wildfire-vtol), whose drone fleet will feed live fire perimeters and fuel moisture into this model for 1–36 hour forecasts in the field.
 
-> **▶ Click the screenshot below or the live-demo badge above to open the interactive dashboard** — pan, zoom, click cells for popups, click rows in the top-10 table to fly the map to that location.
+> **▶ Click the screenshot below or the live-demo badge above to open the interactive dashboard** — pan, zoom, hover any 2 km cell for its county, probability and weather, click rows in the top-10 table to fly the map there.
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
@@ -23,7 +23,7 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 Two complementary models that together cover the wildfire-prediction lifecycle:
 
 1. **Ignition** — "where might a fire START in the next week?" Boosted-tree
-   classifier on ~24.5M live GEE-extracted West Coast cells covering
+   classifier on ~24.5M live GEE-extracted cells covering
    May-October of 2020-2026 (fire season plus the shoulder season, so
    early-season predictions are in-distribution rather than calendar
    extrapolation). Evaluation is fully out-of-time: train 2020-2023, alert
@@ -34,15 +34,28 @@ Two complementary models that together cover the wildfire-prediction lifecycle:
    plainly: the domain-guided augmentation pushes synthetic positives into
    exactly those regimes, so the importances partly reflect the training
    design.
+
+   **Scope.** The pipeline now samples, scores and maps California only (the
+   TIGER state polygon on Earth Engine, bundled county polygons locally;
+   see [wildfire/region.py](wildfire/region.py)). The shipped model and the
+   metrics in the table above predate that change: they come from
+   California + Oregon + Washington training data. Retraining re-extracts
+   through the California geometry (and `train.py` cuts any older
+   West Coast parquet to California on load), which would give
+   California-only metrics.
 2. **Spread** — "given a fire is burning, what does tomorrow's perimeter look
    like?" U-Net segmentation on 64×64 km imagery patches with 11 channels
    (elevation, slope, aspect, NDVI, temp, dewpoint, wind u/v, KBDI, soil
    moisture, prior fire mask). AUC-PR matches the canonical NDWS benchmark.
 
 A combined dashboard CLI runs both models on any date and produces a
-satellite-style HUD heatmap plus structured outputs (parquet, GeoJSON, JSON).
+California risk map plus structured outputs (parquet, GeoJSON, JSON). The map
+draws the probabilities as a 2 km grid clipped to the state, with county
+lines on top; cells at or above the alert threshold shimmer (two summed
+sinusoids per cell, a fundamental and a golden-ratio overtone) so the alert
+set stands out without changing any cell's colour.
 
-[![West Coast wildfire risk dashboard — satellite-style HUD heatmap](docs/screenshots/heatmap.png)](https://raahimnawaz.github.io/wildfire/)
+[![California wildfire risk map](docs/screenshots/heatmap.png)](https://raahimnawaz.github.io/wildfire/)
 
 ## Data sources
 
@@ -60,7 +73,8 @@ satellite-style HUD heatmap plus structured outputs (parquet, GeoJSON, JSON).
 
 ```
 wildfire/
-  config.py            central constants (bbox, paths, hyperparams, threshold)
+  config.py            central constants (region, paths, hyperparams, threshold)
+  region.py            California boundary: GEE geometry, point-in-polygon, counties
   features.py          feature engineering (wind speed, RH, VPD, calendar)
   imbalance.py         domain-guided synthetic minority injection
   synthetic_data.py    offline smoke-test data generator (no GEE auth needed)
@@ -70,7 +84,8 @@ wildfire/
   predict.py           XGBoost scoring CLI
   dashboard.py         combined ignition + spread CLI
   service.py           interactive per-point risk API (FastAPI)
-  heatmap.py           satellite-style HUD heatmap (folium + custom shell)
+  heatmap.py           California risk map (2 km grid on Leaflet, single HTML file)
+  ca_counties.geojson  county outlines (codeforgermany/click_that_hood)
   setup_gee.py         GEE connectivity verifier
   run_real.py          one-shot end-to-end runner
   spread/              Phase 2 — next-day fire spread
@@ -107,15 +122,16 @@ python -m wildfire.dashboard --date 2025-09-15
 ```
 
 The dashboard writes to `wildfire_output/<date>/`:
-- `heatmap_<date>.html` — satellite-style HUD visualization
+- `heatmap_<date>.html` — the California risk map (one self-contained file, ~0.6 MB)
 - `ignition_<date>.parquet` — every scored cell + probability
 - `ignition_<date>.geojson` — for QGIS / web maps
 - `summary_<date>.json` — top-level metrics + spread predictions
 
 ### Serve interactive per-point risk
 
-The dashboard answers "where is the risk today?" for the whole region, once a
-day. To ask "what about *here*?" for an arbitrary point and date:
+The dashboard answers "where is the risk today?" for the whole state, once a
+day. To ask "what about *here*?" for an arbitrary California point and date
+(points outside the state get a 422):
 
 ```powershell
 $env:GEE_PROJECT = "your-gcp-project-id"
@@ -151,6 +167,19 @@ three:
 There is no uncertainty or saliency field. A boosted tree has no dropout to
 sample, so an uncertainty band here would have been invented; the real
 gain-based feature importance (KBDI 0.66, wind speed 0.29) is served instead.
+
+## Known issue: KBDI is a constant at scoring time
+
+In both shipped snapshots (2025-09-15, 2026-07-22) `kbdi_index` is exactly
+300 in every cell. That is the fallback `_kbdi()` in
+[wildfire/data_extraction.py](wildfire/data_extraction.py) substitutes when
+the `UTOKYO/WTLAB/KBDI/v1` collection has no images in the window, so the
+model's most important feature (gain 0.66) carries no information in these
+maps; the ranking comes from wind, temperature and the rest. The map says so
+and shows KBDI as "no data" instead of 300. Fixing it means checking that
+collection's date coverage on Earth Engine, finding how much of the training
+data also hit the fallback, and either switching to a current drought source
+or computing KBDI from ERA5 precipitation and temperature, then retraining.
 
 ## Engineering decisions worth calling out
 
@@ -188,7 +217,8 @@ pip install -r wildfire/requirements.txt
 pytest tests/ -q
 ```
 
-30 smoke tests covering cache hit/miss, feature math (wind speed, RH, VPD,
+50 tests covering the California boundary (known places in and out,
+synthetic points, out-of-state API requests), cache hit/miss, feature math (wind speed, RH, VPD,
 dewpoint inversion, calendar), imbalance handling — including thermodynamic
 consistency of augmented rows — out-of-time validation splitting, threshold
 tuning, and synthetic-data schema. All run CPU-only with no external
