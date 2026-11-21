@@ -240,9 +240,17 @@ Three non-obvious things that took real iteration to get right:
    each under the limit, then concatenated and deduplicated by (lon, lat).
    The page count comes from a coverage target, not a constant: k uniform
    pages of 4,000 cover about 1 − exp(−4000·k / 102,564) of California's 2 km
-   land cells after dedup, so `gee_target_coverage = 0.55` gives 21 pages
-   (20 ≈ 54%, the old fixed 40 ≈ 79%). Each window logs the coverage it
-   actually reached. See `pages_for_coverage()` and `extract_window()`.
+   land cells, so `gee_target_coverage = 0.55` gives 21 pages (20 ≈ 54%, the
+   old fixed 40 ≈ 79%). Measured on 2025-08-04..11: 21 pages touched 55,715
+   distinct cells, 54%. Each window logs the distinct cells it reached. See
+   `pages_for_coverage()` and `extract_window()`.
+
+   **Known bug: the (lon, lat) dedup does not work.** A repeat draw of the
+   same pixel comes back with coordinates jittered by ~0.01°, so in that
+   window 26% of rows (and 49 of 197 fire rows) duplicate another row's
+   inputs exactly. The fix is to sample on a fixed projection with
+   `ee.Image.pixelCoordinates` bands and dedup on the integer pixel index;
+   it is part of the planned re-extraction.
 
    Window pulls are cached under `wildfire_data/cache/` (gitignored), one
    parquet per window keyed by dates, scale, page count and region. The

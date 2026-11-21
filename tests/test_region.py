@@ -62,3 +62,9 @@ def test_pages_follow_the_coverage_target():
     assert pages_for_coverage(0.54, 4000, m) == 20
     assert pages_for_coverage(0.8, 4000, m) > pages_for_coverage(0.5, 4000, m)
     assert 18 <= default_pages() <= 24
+
+
+def test_distinct_cells_counts_cells_not_points():
+    lon = np.array([-120.0, -120.0001, -119.5])
+    lat = np.array([37.0, 37.0001, 37.0])
+    assert region.distinct_cells(lon, lat, 2000) == 2

@@ -84,16 +84,30 @@ def contains(lon, lat) -> np.ndarray:
     return locate(lon, lat) >= 0
 
 
+def _lattice(scale_m: int):
+    from .config import CFG
+    w, s, e, n = CFG.region_bbox
+    dlat = scale_m / 111_320
+    dlon = dlat / np.cos(np.radians((s + n) / 2))
+    return w, s, dlon, dlat
+
+
 @lru_cache(maxsize=4)
 def land_cells(scale_m: int) -> int:
     """Number of scale_m grid cells whose centre lies in California."""
     from .config import CFG
-    w, s, e, n = CFG.region_bbox
-    lat0 = (s + n) / 2
-    dlat = scale_m / 111_320
-    dlon = dlat / np.cos(np.radians(lat0))
+    w, s, dlon, dlat = _lattice(scale_m)
+    e, n = CFG.region_bbox[2], CFG.region_bbox[3]
     lon, lat = np.meshgrid(np.arange(w + dlon / 2, e, dlon), np.arange(s + dlat / 2, n, dlat))
     return int(contains(lon.ravel(), lat.ravel()).sum())
+
+
+def distinct_cells(lon, lat, scale_m: int) -> int:
+    """How many distinct scale_m cells (same lattice as land_cells) the points touch."""
+    w, s, dlon, dlat = _lattice(scale_m)
+    col = np.floor((np.asarray(lon) - w) / dlon).astype(np.int64)
+    row = np.floor((np.asarray(lat) - s) / dlat).astype(np.int64)
+    return int(np.unique(row * 1_000_000 + col).size)
 
 
 def restrict(df, lon_col: str = "longitude", lat_col: str = "latitude"):

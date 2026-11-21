@@ -341,13 +341,18 @@ def _extract_window_uncached(day_start: str, day_end: str,
 
     df = pd.concat(chunks, ignore_index=True)
     if "longitude" in df.columns and "latitude" in df.columns:
-        # GEE returns exact pixel centres, so a repeat draw of the same pixel
-        # across pages matches bit-for-bit; exact dedup is sufficient.
+        # KNOWN BUG (measured 2026-11-21, window 2025-08-04..11): this dedup
+        # does almost nothing. A repeat draw of the same GEE pixel comes back
+        # with coordinates jittered ~0.01 deg, so 26% of rows (and 25% of fire
+        # rows) duplicate another row's inputs exactly. Fix: sample on a fixed
+        # projection with ee.Image.pixelCoordinates bands and dedup on the
+        # integer pixel index.
         n_raw = len(df)
         df = df.drop_duplicates(subset=["longitude", "latitude"], keep="first").reset_index(drop=True)
-        from .region import land_cells
-        print(f"    {n_raw:,} draws -> {len(df):,} unique cells "
-              f"({len(df) / land_cells(CFG.cell_scale_m):.0%} of {CFG.region_name}; "
+        from .region import distinct_cells, land_cells
+        n_cells = distinct_cells(df["longitude"], df["latitude"], CFG.cell_scale_m)
+        print(f"    {n_raw:,} draws -> {len(df):,} rows in {n_cells:,} distinct 2 km cells "
+              f"({n_cells / land_cells(CFG.cell_scale_m):.0%} of {CFG.region_name}; "
               f"target {CFG.gee_target_coverage:.0%})", flush=True)
     df["date"] = pd.Timestamp(day_start) + (pd.Timestamp(day_end) - pd.Timestamp(day_start)) / 2
     return df
