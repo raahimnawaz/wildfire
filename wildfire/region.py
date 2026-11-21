@@ -84,6 +84,18 @@ def contains(lon, lat) -> np.ndarray:
     return locate(lon, lat) >= 0
 
 
+@lru_cache(maxsize=4)
+def land_cells(scale_m: int) -> int:
+    """Number of scale_m grid cells whose centre lies in California."""
+    from .config import CFG
+    w, s, e, n = CFG.region_bbox
+    lat0 = (s + n) / 2
+    dlat = scale_m / 111_320
+    dlon = dlat / np.cos(np.radians(lat0))
+    lon, lat = np.meshgrid(np.arange(w + dlon / 2, e, dlon), np.arange(s + dlat / 2, n, dlat))
+    return int(contains(lon.ravel(), lat.ravel()).sum())
+
+
 def restrict(df, lon_col: str = "longitude", lat_col: str = "latitude"):
     """Rows of ``df`` that fall inside California."""
     return df[contains(df[lon_col].to_numpy(), df[lat_col].to_numpy())]

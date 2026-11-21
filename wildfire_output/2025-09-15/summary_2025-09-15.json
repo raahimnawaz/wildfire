@@ -1,14 +1,16 @@
 {
   "target_date": "2025-09-15",
   "n_cells_scored": 39425,
-  "n_high_risk_cells": 2,
-  "max_ignition_probability": 0.22955895960330963,
-  "mean_ignition_probability": 0.018174469470977783,
+  "n_high_risk_cells": 292,
+  "max_ignition_probability": 0.28711241483688354,
+  "mean_ignition_probability": 0.02340528927743435,
   "spread_predictions": {
     "target_date": "2025-09-15",
     "top_k": 5,
     "patch_source": "real_gee_imagery",
     "patches": []
   },
-  "region": "California"
+  "region": "California",
+  "operational_threshold": 0.16099536418914795,
+  "rescored": "2026-11-21: features from the original pull re-scored with the current production model so the threshold and alerts are consistent; 2025 is inside that model's training years."
 }

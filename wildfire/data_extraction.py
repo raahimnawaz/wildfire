@@ -306,6 +306,21 @@ def _sample_once(ee, stack, geom, n_pixels: int, seed: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def pages_for_coverage(target: float, pixels_per_page: int, n_cells: int) -> int:
+    """Smallest number of independent uniform pages whose deduplicated union
+    is expected to cover `target` of `n_cells`: 1 - exp(-k * pixels / cells)."""
+    import math
+    if not 0 < target < 1:
+        raise ValueError(f"coverage target must be in (0, 1), got {target}")
+    return max(1, math.ceil(-n_cells * math.log(1 - target) / pixels_per_page))
+
+
+def default_pages() -> int:
+    from .region import land_cells
+    return pages_for_coverage(CFG.gee_target_coverage, CFG.gee_num_pixels,
+                              land_cells(CFG.cell_scale_m))
+
+
 def _extract_window_uncached(day_start: str, day_end: str,
                              n_pixels: int, n_pages: int) -> pd.DataFrame:
     ee = _require_ee()
@@ -326,7 +341,14 @@ def _extract_window_uncached(day_start: str, day_end: str,
 
     df = pd.concat(chunks, ignore_index=True)
     if "longitude" in df.columns and "latitude" in df.columns:
+        # GEE returns exact pixel centres, so a repeat draw of the same pixel
+        # across pages matches bit-for-bit; exact dedup is sufficient.
+        n_raw = len(df)
         df = df.drop_duplicates(subset=["longitude", "latitude"], keep="first").reset_index(drop=True)
+        from .region import land_cells
+        print(f"    {n_raw:,} draws -> {len(df):,} unique cells "
+              f"({len(df) / land_cells(CFG.cell_scale_m):.0%} of {CFG.region_name}; "
+              f"target {CFG.gee_target_coverage:.0%})", flush=True)
     df["date"] = pd.Timestamp(day_start) + (pd.Timestamp(day_end) - pd.Timestamp(day_start)) / 2
     return df
 
@@ -338,13 +360,14 @@ def extract_window(day_start: str, day_end: str,
     """
     Sample the GEE feature stack across California for one date window.
     Paged: runs n_pages independent samples with different seeds and concats.
+    n_pages defaults to the count that meets CFG.gee_target_coverage.
     Cached on disk by (day_start, day_end, scale, pages, pixels_per_page) —
     repeated calls hit disk instead of GEE.
     """
     from .cache import get_or_compute_parquet, key_window
 
     per_call = n_pixels or CFG.gee_num_pixels
-    pages    = n_pages  or CFG.gee_pages_per_window
+    pages    = n_pages  or default_pages()
     key = key_window(day_start, day_end, CFG.cell_scale_m, pages, per_call,
                      region=CFG.region_name)
 

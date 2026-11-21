@@ -11,7 +11,7 @@ Trained on **real** Google Earth Engine satellite data and the canonical
 
 > **Planned for** [wildfire-vtol](https://github.com/raahimnawaz/wildfire-vtol), whose drone fleet will feed live fire perimeters and fuel moisture into this model for 1–36 hour forecasts in the field.
 
-> **▶ Click the screenshot below or the live-demo badge above to open the interactive dashboard** — pan, zoom, hover any 2 km cell for its county, probability and weather, click rows in the top-10 table to fly the map there.
+> **▶ Click the screenshot below or the live-demo badge above to open the interactive dashboard** — hover any 2 km cell for its probability, click a cell, county or hotspot to see its inputs and what drove its score.
 
 | Model | Task | Real-data metrics | Benchmark |
 |---|---|---|---|
@@ -50,10 +50,22 @@ Two complementary models that together cover the wildfire-prediction lifecycle:
 
 A combined dashboard CLI runs both models on any date and produces a
 California risk map plus structured outputs (parquet, GeoJSON, JSON). The map
-draws the probabilities as a 2 km grid clipped to the state, with county
-lines on top; cells at or above the alert threshold shimmer (two summed
-sinusoids per cell, a fundamental and a golden-ratio overtone) so the alert
-set stands out without changing any cell's colour.
+is built like an operations view:
+
+- **Answer first.** A header shows the day's risk level and input health
+  (weather window, missing inputs, which data the model was fit on), and the
+  panel opens with one sentence: how many cells are on alert and where.
+- **Colour only for signal.** Below the alert threshold cells are quiet slate;
+  at it the ramp jumps to amber, then to red by 3x. Alert cells shimmer (two
+  summed sinusoids per cell, a fundamental and a golden-ratio overtone), and
+  the five largest alert clusters get a slow breathing ring.
+- **Everything can be traced.** Click a cell, county or hotspot and the panel
+  becomes an inspector with the inputs and each input's contribution to the
+  score (XGBoost per-feature contributions, which add up exactly to the
+  cell's log-odds).
+- **Risk level** is a display band on the share of cells over the threshold
+  (Low < 0.1%, Moderate < 1%, Elevated < 5%, Severe ≥ 5%), not a model
+  output, and the page says so.
 
 [![California wildfire risk map](docs/screenshots/heatmap.png)](https://raahimnawaz.github.io/wildfire/)
 
@@ -122,7 +134,7 @@ python -m wildfire.dashboard --date 2025-09-15
 ```
 
 The dashboard writes to `wildfire_output/<date>/`:
-- `heatmap_<date>.html` — the California risk map (one self-contained file, ~0.6 MB)
+- `heatmap_<date>.html` — the California risk map (one self-contained file, ~1.4 MB)
 - `ignition_<date>.parquet` — every scored cell + probability
 - `ignition_<date>.geojson` — for QGIS / web maps
 - `summary_<date>.json` — top-level metrics + spread predictions
@@ -168,6 +180,18 @@ There is no uncertainty or saliency field. A boosted tree has no dropout to
 sample, so an uncertainty band here would have been invented; the real
 gain-based feature importance (KBDI 0.66, wind speed 0.29) is served instead.
 
+## What the model does not see
+
+The inputs are weather, drought, vegetation and terrain. Nothing describes
+where people and infrastructure start fires: no power lines, roads,
+population or wildland-urban interface, and no lightning. Most California
+ignitions are human-caused, so this is the largest gap in what the model can
+know. Candidate layers: distance to transmission lines (HIFLD), distance to
+roads (TIGER roads, on Earth Engine), population density (GHSL, on Earth
+Engine), and a lightning source. Each needs extraction, a retrain and a
+re-evaluation; the FIRMS labels do not record cause, so the gain has to be
+measured, not assumed.
+
 ## Known issue: KBDI is a constant at scoring time
 
 In both shipped snapshots (2025-09-15, 2026-07-22) `kbdi_index` is exactly
@@ -175,7 +199,8 @@ In both shipped snapshots (2025-09-15, 2026-07-22) `kbdi_index` is exactly
 [wildfire/data_extraction.py](wildfire/data_extraction.py) substitutes when
 the `UTOKYO/WTLAB/KBDI/v1` collection has no images in the window, so the
 model's most important feature (gain 0.66) carries no information in these
-maps; the ranking comes from wind, temperature and the rest. The map says so
+maps, and it is not neutral: the per-cell contributions show the fallback
+lowering every cell's score by 0.9 to 1.9 log-odds. The map says so
 and shows KBDI as "no data" instead of 300. Fixing it means checking that
 collection's date coverage on Earth Engine, finding how much of the training
 data also hit the fallback, and either switching to a current drought source
@@ -197,7 +222,16 @@ Three non-obvious things that took real iteration to get right:
    `FeatureCollection` caps at 5000 features — `numPixels=50000` silently
    fails. Workaround: N independent `.sample()` calls with different seeds,
    each under the limit, then concatenated and deduplicated by (lon, lat).
-   Effective 10× density at the same per-call cost. See `extract_window()`.
+   The page count comes from a coverage target, not a constant: k uniform
+   pages of 4,000 cover about 1 − exp(−4000·k / 102,564) of California's 2 km
+   land cells after dedup, so `gee_target_coverage = 0.55` gives 21 pages
+   (20 ≈ 54%, the old fixed 40 ≈ 79%). Each window logs the coverage it
+   actually reached. See `pages_for_coverage()` and `extract_window()`.
+
+   Window pulls are cached under `wildfire_data/cache/` (gitignored), one
+   parquet per window keyed by dates, scale, page count and region. The
+   nightly CI runner starts empty each time, so nothing carries between
+   nights there; each night pulls only its own 7-day window.
 
 3. **Leak-free threshold tuning.** The hardcoded operational threshold =
    0.60 produced zero alerts on real data — the fire base rate is ~0.15%,
@@ -217,7 +251,7 @@ pip install -r wildfire/requirements.txt
 pytest tests/ -q
 ```
 
-50 tests covering the California boundary (known places in and out,
+54 tests covering the California boundary (known places in and out,
 synthetic points, out-of-state API requests), cache hit/miss, feature math (wind speed, RH, VPD,
 dewpoint inversion, calendar), imbalance handling — including thermodynamic
 consistency of augmented rows — out-of-time validation splitting, threshold

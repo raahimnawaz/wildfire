@@ -47,3 +47,18 @@ def test_synthetic_points_land_in_california():
     assert region.contains(df["longitude"], df["latitude"]).all()
     w, s, e, n = CFG.region_bbox
     assert df["longitude"].between(w, e).all() and df["latitude"].between(s, n).all()
+
+
+def test_land_cells_matches_california_area():
+    """~424k km2 of land at 4 km2 per cell."""
+    assert 95_000 < region.land_cells(2000) < 110_000
+
+
+def test_pages_follow_the_coverage_target():
+    from wildfire.data_extraction import default_pages, pages_for_coverage
+
+    m = 102_744
+    assert pages_for_coverage(0.55, 4000, m) == 21
+    assert pages_for_coverage(0.54, 4000, m) == 20
+    assert pages_for_coverage(0.8, 4000, m) > pages_for_coverage(0.5, 4000, m)
+    assert 18 <= default_pages() <= 24

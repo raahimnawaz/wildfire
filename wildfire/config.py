@@ -46,7 +46,11 @@ class WildfireConfig:
 
     # GEE sampling
     gee_num_pixels: int = 4_000   # per-call cap (GEE getInfo() hard limit is 5000)
-    gee_pages_per_window: int = 40  # dedup leaves ~40k unique California cells (~37% of the 2 km grid)
+    # Pages per window are derived from a coverage target, not fixed: each
+    # page draws gee_num_pixels uniform-random cells, so k pages cover about
+    # 1 - exp(-k * pixels / cells) of California's ~103k 2 km land cells after
+    # dedup. 0.55 -> 21 pages (20 pages ~ 54%, the old 40 ~ 79%).
+    gee_target_coverage: float = 0.55
     gee_tile_scale: int = 4
     gee_seed: int = 42
 

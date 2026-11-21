@@ -30,11 +30,31 @@ def test_render_writes_a_self_contained_page(tmp_path):
                    summary={"operational_threshold": 0.16}, out_html=out)
     page = out.read_text()
     assert "California Wildfire Risk — 2025-09-15" in page
-    assert "trained on West Coast (CA, OR, WA) samples" in page  # legacy meta, no region recorded
+    assert "California, Oregon and Washington samples" in page  # legacy meta, no region recorded
+    assert "Model fit: CA · OR · WA" in page
     assert out.stat().st_size < 2_000_000
 
 
 def test_ramp_is_anchored_to_threshold():
-    assert heatmap.ramp_color(0.16, 0.16) == "#ffc43d"
-    assert heatmap.ramp_color(0.0, 0.16) == "#0b1e36"
+    assert heatmap.ramp_color(0.16, 0.16) == "#f2b134"   # threshold = first warm colour
+    assert heatmap.ramp_color(0.0, 0.16) == "#10161e"
+    assert heatmap.ramp_color(0.159, 0.16).startswith("#3")  # just below stays slate
     assert heatmap.ramp_color(0.9, 0.16) == "#ff2d4a"
+
+
+def test_risk_level_bands():
+    assert heatmap.risk_level(0.0)[0] == "Low"
+    assert heatmap.risk_level(0.005)[0] == "Moderate"
+    assert heatmap.risk_level(0.026)[0] == "Elevated"   # 2026-07-22: 1,027 / 39,425
+    assert heatmap.risk_level(0.2)[0] == "Severe"
+
+
+def test_hotspots_rank_clusters_by_mass():
+    df = _scored()
+    grid = heatmap.rasterize(df)
+    spots = heatmap.hotspots(grid, threshold=0.16)
+    assert len(spots) <= heatmap.N_HOTSPOTS
+    masses = [sum(np.nan_to_num(grid["p"]).ravel()[s["cells"]]) for s in spots]
+    assert masses == sorted(masses, reverse=True)
+    for s in spots:
+        assert all(np.nan_to_num(grid["p"]).ravel()[s["cells"]] >= 0.16)
